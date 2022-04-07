@@ -1,0 +1,146 @@
+---
+title: "First Maps"
+author: "Dana"
+date: "29/03/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## First Maps
+
+In this markdown I will summarise everything that is needed to create the GSA map, to plot data points onto it and to count instances of words per location in the corpus. I start by loading all necessary libraries and reading in the csv file for the corpus.
+
+```{r prep}
+library(htm2txt)  
+library(quanteda)
+library(readtext)
+library(stringr)
+library(dplyr)
+library(viridis)
+library(tidyverse) 
+library(sp)
+library(rgdal)
+library(broom) 
+library(readxl)
+library(here) 
+library(mapdata)	
+library(rworldmap)
+library(extrafont)
+corpus <- read.csv(file = './data_ling//data_small/total.csv')
+```
+
+## Count Function
+
+The next step is creating the function that counts instances of words per city. 
+
+```{r count 1}
+#takes two words and produces proportion. first input is the the standard.
+regcount <- function(corp, word1, word2, case = FALSE, neg = FALSE){
+  
+  # Set case/regex
+  word1 <- paste('\\b', word1, '\\b', sep ="") 
+  word1 <- regex(word1, ignore_case = !case)
+  
+  word2 <- paste('\\b', word2, '\\b', sep ="") 
+  word2 <- regex(word2, ignore_case = !case)
+  
+  # Extract indexes with at least one hit
+  hits1 <- str_which(string = corp,  pat = word1,  negate = neg)   
+  hits2 <- str_which(string = corp,  pat = word2,  negate = neg)   
+  
+  # Cities
+  cities1<- corpus$location[hits1] 
+  cities2<- corpus$location[hits2] 
+  
+  c1<-as.data.frame(table(cities1))
+  c2<-as.data.frame(table(cities2))
+  
+  dtable <- merge(c1, c2, by.x = 'cities1', by.y = 'cities2', all =TRUE )
+  
+  dtable[is.na(dtable)] <- 0
+  
+  dtable$prop <- 100* (dtable$Freq.x / (dtable$Freq.x + dtable$Freq.y) )
+  
+  # This will be the structures for output
+  output<-c()
+  output <- dtable
+  
+  # Output results  
+  return(output)
+}
+```
+
+## Counting words
+
+The next chunk first counts two words in the corpus and assigns the counts to reg_output. Reg_output then gets column names so that it can be merged with the longitudes and latitudes of the cities in the next step. 
+
+```{r count 2}
+reg_output <- regcount(corp = corpus$message, word1 = "Sahne", word2 ="Obers", case = FALSE)
+colnames(reg_output) <- c("city", "count1", "count2", "Proportion")
+```
+
+## Coordinates
+
+First the csv file with city coordinates for the GSA is loaded. Then coordinates and counts are merged.
+
+```{r coordinates}
+longlat <- read.csv(file = './data_maps/all_cities.csv')
+merger <- merge(reg_output, longlat, by ="city")
+```
+
+## Initial Map
+
+To create the outlines of the GSA based on coordinates, the following chunk gets a world map and then extracts the polygons for the GSA. Those coordinates then get stored in DACH_coord.
+
+```{r worldmap}
+worldMap <- getMap()
+DACH <- c("Germany", "Austria", "Switzerland")
+DACH_map <- which(worldMap$NAME%in%DACH)
+DACH_coord <- lapply(DACH_map, function(i){
+  df <- data.frame(worldMap@polygons[[i]]@Polygons[[1]]@coords)
+  df$region =as.character(worldMap$NAME[i])
+  colnames(df) <- list("long", "lat", "region")
+  return(df)
+})
+DACH_coord <- do.call("rbind", DACH_coord)
+```
+
+## Plotting Counts
+
+The next step then is the mapping of the coordinates with their counts using ggplot2. First, I take the GSA coordinates and create a blank map. I define which range of coordinates gets shown (coord_map) and set the theme to minimal. I then tell ggplot to use the merger data and plot points on my blank map using coordinates. The colour of the points is based on the proportion of use of the first (or main) word in the count. City labels can be added. scale_color_gradient colours the gradient of the proportion (and the points). Different color filling is needed for categorical data. Labs sets the title of the legend. ggtitle sets the title of the whole plot. The last theme element gets rid of grid lines and marks on the axis, including axis title.
+
+```{r mapping}
+ggplot() + geom_polygon(data = DACH_coord, 
+                        aes(x = long, y = lat, group = region),
+                        colour = "black", 
+                        size = 0.1, 
+                        fill = "snow3") + 
+  coord_map(xlim = c(4.5, 17),  
+            ylim = c(45.5, 55)) + 
+  theme_minimal() +  
+  geom_point(data = merger, 
+             aes(x = lng, y = lat, col = Proportion), 
+             alpha = 0.9)  +
+  #comment out line below to lose city labels
+  #geom_text(data = merger, aes(x = lng, y = lat, label=city), hjust=0.1, vjust=0.1, size = 2) +
+  #scale_color_viridis(option = "magma") +
+  scale_color_gradient(low = "seagreen3", high = "mediumpurple3") +
+  labs(size="Proportion") +
+  ggtitle("Sahne vs. Obers in the GSA") +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank(),
+        plot.title = element_text(hjust = 0.5))
+```
+
+Maps can then be easily exported using the following code chunk.
+
+```{r export}
+ggsave("./output/full_sahneobers.png", width = 6.5, height = 5.5)
+```
+
