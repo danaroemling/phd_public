@@ -25,7 +25,7 @@ In case the last line of the json is incomplete (which would prevent it from bei
 head -$(($(wc -l < jodel_archive.json) - 1)) jodel_archive.json > active.json
 ```
 
-In order to run the corpus on the BEAR HPC it was necessary to split the two original files up in multiple smaller files, which could then run parallel. The next chunk splits up the original file into new files with each 100000 lines. The prefix for all new files is XY.
+In order to run the corpus on the BEAR HPC it was necessary to split the two original files up in multiple smaller files, which could then run in parallel. The next chunk splits up the original file into new files with each 100000 lines. The prefix for all new files is XY.
 
 ```{r bash 3}
 split -l 100000 data_ling/data_active/active.json XY
@@ -33,7 +33,7 @@ split -l 100000 data_ling/data_active/active.json XY
 
 ## Unpacking json
 
-The json structure is nested. This means information is embedded in a tree structure, which needs to be extracted in order to make all posts in the corpus accessible. This next chunk first takes a json file as input and creates an initial data frame. Then the first level of the tree structure is extracted by using the flatten function. Only four columns then are used in a new smaller data frame as most of the detailed information is not necessary for an initial analysis. Then the new corpus was created. The next step is a for loop that extracts the child posts from their one cell and appends them to the corpus, so that for all posts message, time stamp, ID and location are available. After that the corpus is made into a data frame and column names are added. Then the corpus can be exported.
+The json structure is nested. This means information is embedded in a tree structure, which needs to be extracted in order to make all posts in the corpus accessible. This next chunk first takes a json file as input and creates an initial data frame. Then the first level of the tree structure is extracted by using the flatten function. Only four columns then are used in a new smaller data frame as most of the detailed information is not necessary for the analysis. Then the new corpus was created: A for loop  extracts the child posts from their one cell and appends them to the corpus, so that for all posts message, time stamp, ID and location are saved. After that the corpus is transformed into a data frame and column names are added. Then the corpus can be exported.
 
 ```{r unnest}
 library(dplyr)
@@ -81,6 +81,7 @@ ten <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/extract
 eleven <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/extracted/11.csv')
 twelve <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/extracted/12.csv')
 thirteen <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/extracted/13.csv')
+
 part1 <- rbind(one, two, three, four, five, six, seven, eight, nine, ten, eleven, twelve, thirteen)
 colnames(part1) <- c("message", "created_at", "location", "post_id")
 write.csv(part1,"/rds/projects/g/grievej-german-dialect-profiling/part1.csv", fileEncoding = "UTF-8", row.names = FALSE)
@@ -110,3 +111,4 @@ total <- rbind(part1, part2)
 write.csv(total,"/rds/projects/g/grievej-german-dialect-profiling/total.csv", fileEncoding = "UTF-8", row.names = FALSE)
 ```
 
+This, in total, created extracted versions of the original two json files and a combined file, with all the information in one place. 
