@@ -1,4 +1,5 @@
 # phd_public
 Dana's PhD code.
 
-Both rmd files will likely not run through locally, as they are not designed to. They are for code documentation. 
+Most of the files are likely not running locally, since the original data is not available. Also, some code is bash and not R.
+The files are mainly used for documentation. 
