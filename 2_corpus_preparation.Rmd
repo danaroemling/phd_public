@@ -241,8 +241,7 @@ write.csv(types_loc,"/rds/projects/g/grievej-german-dialect-profiling/types_at_l
 
 The last step was to create a matrix spanning cities and words from these aggregations. For this, the tokenised and cleaned corpus was grouped by word and counted per city. This gives me a data frame with three columns, word, city and frequency. I can then filter for word of interest.
 
-```{r matrix 1}
-# full matrix
+```{r matrix filter}
 trial <- corpus %>% group_by(word) %>% count(city)
 write.csv(trial,"/rds/projects/g/grievej-german-dialect-profiling/full_matrix_for_filtering.csv", fileEncoding = "UTF-8", row.names = FALSE)
 
@@ -254,7 +253,7 @@ colnames(one_word) <- c("Token", "City", "Frequency")
 To avoid doing this every time, a for loop extracted all filtered top 10.000 words into a  matrix.
 For this, the city list was used. Only the city name column was kept. Both city name columns were renamed Stadt2 (City2), so that it wouldn't match any of the top 10k words. The list of the top 10k words needed to be converted using the d2v() function from the str2str package, which turns it into an atomic vector. 
 
-```{r matrix}
+```{r matrix creation}
 # get city column from city list
 citylist <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/gsa_geo_filtered.csv') %>% select(City)
 colnames(citylist) <- c("Stadt2")
@@ -265,7 +264,7 @@ trial <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/full_
 # read in first 10k of top words
 ordered_top_words <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/ordered_top_words.csv', nrows = 10000, header = TRUE) %>% select(word) %>% d2v()
 
-#don't name columns "City" as that word is part of the word list
+# loop over 10k words and filter by it
 for (value in ordered_top_words) {
   temp <- trial %>% filter(word == value) %>% select(city, n)
   colnames(temp) <- c("Stadt2", "Frequency")
@@ -273,6 +272,7 @@ for (value in ordered_top_words) {
   colnames(citylist)[ncol(citylist)] <- value
 }
 
+# export
 write.csv(citylist,"/rds/projects/g/grievej-german-dialect-profiling/10k_matrix.csv", fileEncoding = "UTF-8", row.names = FALSE)
 ```
 
