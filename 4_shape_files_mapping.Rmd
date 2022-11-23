@@ -1,0 +1,178 @@
+---
+title: "Shape Files Mapping"
+author: "Dana"
+date: '2022-10-24'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Mapping with Shape Files
+
+This RMD is about using the shape files for the German-speaking area and filling the shapes given a frequency. 
+I start by loading the libraries. 
+
+```{r libs}
+library(sf)
+library(tidyverse)
+library(sp)
+library(rworldmap)
+library(dplyr)
+library(RColorBrewer)
+```
+
+Then I load in the shape files.
+
+```{r load shapes}
+germany <- st_read(dsn="/rds/projects/g/grievej-german-dialect-profiling/shape/Germany/plz-3stellig/", layer="plz-3stellig")
+austria <- st_read(dsn="/rds/projects/g/grievej-german-dialect-profiling/shape/Austria/Gemeinden/", layer="Gemeinden_250")
+switzerland <- st_read(dsn="/rds/projects/g/grievej-german-dialect-profiling/shape/Switzerland/PC/", layer="PLZO_PLZ")
+EU <- st_read(dsn="/rds/projects/g/grievej-german-dialect-profiling/shape/EU/Try/", layer="NUTS_RG_20M_2021_3035")
+#plot(germany)
+#plot(austria)
+#plot(switzerland)
+```
+
+I change the projection to the same one for all of the shape files.
+
+```{r projection}
+germany <- st_transform(germany, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+austria <- st_transform(austria, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+switzerland <- st_transform(switzerland, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+EU <- st_transform(EU, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+```
+
+I then get the outlines I want to plot around the filled shapes.
+
+```{r gsa outline}
+gsa_string <- c("DE", "AT", "CH")
+gsa <- filter(EU, CNTR_CODE %in% gsa_string)
+gsa_outline <- filter(gsa, LEVL_CODE == 0)
+#plot(gsa_outline)
+```
+
+Now I load in the name & post code match files. 
+
+```{r load post code}
+ger_cities <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/shape/germany.csv', colClasses='character')
+aus_cities <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/shape/austria.csv', colClasses='character')
+s_cities <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/shape/switzerland.csv', colClasses='character')
+```
+
+Now I can merge the shape files with the city name information. 
+
+```{r merge}
+merger_ger <- as.data.frame(merge(ger_cities, germany, by.x ="PLZ3_Ger", by.y = "plz", all.x = TRUE))
+merger_aus <- merge(aus_cities, austria, by.x ="Gemeinde_Aus", by.y = "GKZ", all.x = TRUE)
+merger_s <- merge(s_cities, switzerland, by.x ="PLZ4_Swi", by.y = "PLZ", all.x = TRUE)
+
+```
+
+With this, I can make simple plots. (I could have made a plot without having the names in the shape files and just use the shape files, but then I couldn't combine it with the Jodel data.)
+
+```{r simple plots}
+#Austria plots quickly, just the areas where there is data
+ggplot(data = merger_aus, aes(geometry = geometry)) +
+  geom_sf()
+
+#Switzerland plots quickly too, just the areas where there is data
+ggplot(data = merger_s, aes(geometry = geometry)) +
+  geom_sf()
+
+#Germany takes quite long
+ggplot(data = merger_ger, aes(geometry = geometry)) +
+  geom_sf()
+
+#first combined plot
+ggplot() +
+  geom_sf(data = gsa_outline, aes(geometry = geometry), colour="black", fill=NA) + 
+  geom_sf(data = merger_ger, aes(geometry = geometry)) +
+  geom_sf(data = merger_aus, aes(geometry = geometry)) +
+  geom_sf(data = merger_s, aes(geometry = geometry)) 
+```
+
+Then I make the map more minimal.
+
+```{r minimal}
+#more minimal combined plot
+ggplot() +
+  geom_sf(data = gsa_outline, aes(geometry = geometry), colour="black", fill=NA) +
+  theme_minimal() +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank(),
+        plot.title = element_text(hjust = 0.5)) +
+  geom_sf(data = merger_ger, aes(geometry = geometry), colour="black", fill=NA) +
+  geom_sf(data = merger_aus, aes(geometry = geometry), colour="black", fill=NA) +
+  geom_sf(data = merger_s, aes(geometry = geometry), colour="black", fill=NA)
+```
+
+To plot something I counted, I merge with count data. For safety and ease, here is the count function: 
+```{r count function}
+corpus <- read.csv(file = './data_ling/train_70.csv')
+
+# this counts the occurrence of a feature in the corpus
+regcount <- function(corp, word1, case = FALSE, neg = FALSE){
+  # Set case/regex
+  word1 <- paste('\\b', word1, '\\b', sep ="") 
+  word1 <- regex(word1, ignore_case = !case)
+  # Extract indexes with at least one hit
+  hits1 <- str_which(string = corp,  pat = word1,  negate = neg)   
+  # Cities
+  cities1<- corpus$location[hits1] 
+  c1<-as.data.frame(table(cities1))
+  c1[is.na(c1)] <- 0
+  # This will be the structures for output
+  output <- c()
+  output <- c1
+  # Output results  
+  return(output)
+}
+
+# this is the execution of the search
+reg_output <- regcount(corp = corpus$message, word1 = "autobahn", case = FALSE)
+
+# this gives new column names
+colnames(reg_output) <- c("City", "Frequency")
+```
+
+And now merging: 
+
+```{r merge count}
+plot_ger <- merge(merger_ger, reg_output, by ="City", all.x = TRUE)
+plot_aus <- merge(merger_aus, reg_output, by ="City", all.x = TRUE)
+plot_swiz <- merge(merger_s, reg_output, by ="City", all.x = TRUE)
+```
+
+Finally, I can produce the map.
+
+```{r final plot}
+#dev.off()
+ggplot() +
+  geom_sf(data = gsa_outline, aes(geometry = geometry), colour="black", fill=NA, size = 0.1) +
+  theme_minimal() +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank(),
+        plot.title = element_text(hjust = 0.5)) +
+  geom_sf(data = plot_aus[!is.na(plot_aus$Frequency),], 
+          aes(geometry = geometry, fill=Frequency), size = 0.05) + 
+  geom_sf(data = plot_swiz[!is.na(plot_swiz$Frequency),], 
+          aes(geometry = geometry, fill=Frequency), size = 0.05) +
+  geom_sf(data = plot_ger[!is.na(plot_ger$Frequency),], 
+          aes(geometry = geometry, fill=Frequency), size = 0.05) +
+  scale_fill_gradient2(midpoint = 0) +
+  ggtitle("Frequency of 'Matura' in the GSA") +
+  labs(fill='Matura') 
+```
+
+
+
+
+

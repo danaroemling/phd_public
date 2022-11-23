@@ -1,0 +1,282 @@
+---
+title: "Corpus Preparation"
+author: "Dana"
+date: '2022-11-23'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Corpus Preparation
+
+After the corpus was extracted from the JSON files, the corpus now needs to be prepared for analysis. 
+This document has several parts which detail these steps:
+
+1. Creating a list of all locations in the corpus
+2. Getting coordinate information for all unique locations
+3. Splitting the corpus
+4. Tokenisation
+5. Counting Tokens
+
+
+### Location or Citylist
+
+In order to access all coordinates and relevant shape file information, all locations were extracted from the whole corpus, to make sure all locations are map-able. 
+
+```{r unique cities}
+corpus <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/total.csv')
+city_count <- as.data.frame(unique(corpus$City))
+write.csv(city_count,"/rds/projects/g/grievej-german-dialect-profiling/city_list.csv", fileEncoding = "UTF-8", row.names = FALSE)
+```
+
+
+### Google API for Coordinates
+
+In the next step the Google API was used to extract all coordinates given the names of the cities. This was done using the ggmap package, which requires a Google API account.
+(Note that in between the unique city list and this step, I manually checked the locations: I checked whether they were on a list of GSA cities and checked (and disregarded) cities, which exist in more than one country.)
+
+First I reed in the city data and get access to the Google API.
+
+```{r ggmap 1}
+library(dplyr)
+library(ggmap)
+
+# get city names
+ger_cities <- read.csv(file = './data_maps/germany.csv', colClasses='character')
+aus_cities <- read.csv(file = './data_maps/austria.csv', colClasses='character')
+s_cities <- read.csv(file = './data_maps/switzerland.csv', colClasses='character')
+
+# sort API access for google
+register_google(key = "XXX")
+```
+
+Then I call the API and check for every name in the city lists and append the coordinates to my objects. In otder for the main function, mutate_geocode(), to work, the city lists cannot be factors. Each of these lists gets exported.
+
+```{r ggmap 2}
+# switzerland
+only_s_city <- s_cities %>% select(City) %>% data.frame(stringsAsFactors = FALSE)
+switzerland_geo <- mutate_geocode(only_s_city, City)
+write.csv(switzerland_geo,"switzerland_geo.csv", fileEncoding = "UTF-8", row.names = FALSE)
+
+# austria
+only_a_city <- aus_cities %>% select(City) %>% data.frame(stringsAsFactors = FALSE)
+austria_geo <- mutate_geocode(only_a_city, City)
+write.csv(austria_geo,"austria_geo.csv", fileEncoding = "UTF-8", row.names = FALSE)
+
+# germany
+only_g_city <- ger_cities %>% select(City) %>% data.frame(stringsAsFactors = FALSE)
+germany_geo <- mutate_geocode(only_g_city, City)
+write.csv(germany_geo,"germany_geo.csv", fileEncoding = "UTF-8", row.names = FALSE)
+```
+
+As a last step they were combined into one file and exported. And also a filtered version was created, were coordinates were limited to roughly the GSA to exclude any outlier cities.
+
+```{r ggmap 3}
+# make one file
+one <- rbind(switzerland_geo, austria_geo)
+two <- rbind(one, germany_geo)
+write.csv(two,"gsa_geo.csv", fileEncoding = "UTF-8", row.names = FALSE)
+
+# filter to proper coordinates
+filtered_geo <- two %>% dplyr::filter(lat < 55)
+filtered_geo <- filtered_geo %>% dplyr::filter(lat > 45)
+filtered_geo <- filtered_geo %>% dplyr::filter(lon > 4)
+filtered_geo <- filtered_geo %>% dplyr::filter(lon < 17)
+write.csv(filtered_geo,"gsa_geo_filtered.csv", fileEncoding = "UTF-8", row.names = FALSE)
+```
+
+
+
+### Training, Test and Validation
+
+In this part I will save how I split the corpus up into training, test and validation parts.
+
+First step is reading in the whole corpus created through extraction and getting the library for this part.
+
+```{r data}
+corpus <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/total.csv')
+library(dplyr)
+```
+
+With dplyr's sample function, I sample 70% of the data and save it as train. This creates an ID column by which the other 30% can then be saved (by antijoin of the 70%) as test. 
+
+```{r split}
+train <- corpus %>% dplyr::sample_frac(0.70)
+test  <- dplyr::anti_join(corpus, train, by = 'id')
+```
+
+The last step is to save both files. Note that the test and validation data is still in one file and needs to be split before it can be used.
+
+```{r export}
+write.csv(train,"train_70.csv", fileEncoding = "UTF-8", row.names = FALSE)
+write.csv(test,"test_30.csv", fileEncoding = "UTF-8", row.names = FALSE)
+```
+
+
+
+### Tokenisation
+
+After splitting the corpus, train_70 can be used for analysis. For this, it needs to be tokenised.
+In order to do this I read in the corpus and load the relevant libraries for this section. Then I create 15 groups and assign each row a group, so that I can filter the corpus by group. This is so that the tokenisation steps can be done in chunks for performance.
+
+```{r read in}
+# libraries
+library(tidyverse)
+library(splitstackshape)
+
+# corpus
+corpus2 <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/train_70.csv', fileEncoding = "UTF-8") 
+
+# This creates 15 groups and then subsets them, so that memory is preserved
+corpus2$group <- rep(1:15, len=nrow(corpus2)) %>% as.numeric()
+partA <- corpus2 %>% dplyr::filter(group == 1)
+partB <- corpus2 %>% dplyr::filter(group == 2)
+partC <- corpus2 %>% dplyr::filter(group == 3)
+partD <- corpus2 %>% dplyr::filter(group == 4)
+partE <- corpus2 %>% dplyr::filter(group == 5)
+partF <- corpus2 %>% dplyr::filter(group == 6)
+partG <- corpus2 %>% dplyr::filter(group == 7)
+partH <- corpus2 %>% dplyr::filter(group == 8)
+partI <- corpus2 %>% dplyr::filter(group == 9)
+partJ <- corpus2 %>% dplyr::filter(group == 10)
+partK <- corpus2 %>% dplyr::filter(group == 11)
+partL <- corpus2 %>% dplyr::filter(group == 12)
+partM <- corpus2 %>% dplyr::filter(group == 13)
+partN <- corpus2 %>% dplyr::filter(group == 14)
+partO <- corpus2 %>% dplyr::filter(group == 15)
+```
+
+The next step is the actual tokenisation, which employs cSplit from the splitstackshape package. It creates a new row for each token preserving the other column details and it splits the message column using the regex \W. This regular expression used as a separator means that all word characters, so a-z, A-Z, 0-9 and underscore were kept, as the separator matched all non-word characters. Whitespace is removed in this step. fixed = FALSE is needed because the seperator is regex. 
+
+```{r tokens}
+# This does the tokenisation
+part1 <- cSplit(partA, "message", "\\W", direction = "long", fixed = FALSE, stripWhite = TRUE)
+part2 <- cSplit(partB, "message", "\\W", direction = "long", fixed = FALSE, stripWhite = TRUE)
+part3 <- cSplit(partC, "message", "\\W", direction = "long", fixed = FALSE, stripWhite = TRUE)
+part4 <- cSplit(partD, "message", "\\W", direction = "long", fixed = FALSE, stripWhite = TRUE)
+part5 <- cSplit(partE, "message", "\\W", direction = "long", fixed = FALSE, stripWhite = TRUE)
+part6 <- cSplit(partF, "message", "\\W", direction = "long", fixed = FALSE, stripWhite = TRUE)
+part7 <- cSplit(partG, "message", "\\W", direction = "long", fixed = FALSE, stripWhite = TRUE)
+part8 <- cSplit(partH, "message", "\\W", direction = "long", fixed = FALSE, stripWhite = TRUE)
+part9 <- cSplit(partI, "message", "\\W", direction = "long", fixed = FALSE, stripWhite = TRUE)
+part10 <- cSplit(partJ, "message", "\\W", direction = "long", fixed = FALSE, stripWhite = TRUE)
+part11 <- cSplit(partK, "message", "\\W", direction = "long", fixed = FALSE, stripWhite = TRUE)
+part12 <- cSplit(partL, "message", "\\W", direction = "long", fixed = FALSE, stripWhite = TRUE)
+part13 <- cSplit(partM, "message", "\\W", direction = "long", fixed = FALSE, stripWhite = TRUE)
+part14 <- cSplit(partN, "message", "\\W", direction = "long", fixed = FALSE, stripWhite = TRUE)
+part15 <- cSplit(partO, "message", "\\W", direction = "long", fixed = FALSE, stripWhite = TRUE)
+```
+
+Then all parts were combined and exported. 
+
+```{r export 2}
+combined <- do.call("rbind", list(part1, part2, part3, part4, part5, part6, part7, part8, part9, part10, part11, part12, part13, part14, part15))
+write.csv(combined,"all_of_the_raw_tokens.csv", fileEncoding = "UTF-8", row.names = FALSE)
+```
+
+
+
+### Counting Tokens
+
+In a last preparation section, various things in the newly created token list were counted or aggregated. After loading the libraries and the object with all raw tokens, I get rid of the information like ID or time stamp, as this step just requires message and location information. I also disregard any empty cells, as the line break was not striped during tokenisation, creating many empty cells. This cleaned token list (without the other columns) is then also exported.
+
+```{r cleaning token list}
+# libraries
+library(tidyverse)
+library(str2str) # atomic vector
+
+# initial file
+corpus <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/Archive/all_of_the_raw_tokens.csv') 
+working <- corpus %>% select(message, location)
+working <- working[!(working$message == ""), ]
+colnames(working) <- c("word", "city")
+write.csv(working,"/rds/projects/g/grievej-german-dialect-profiling/cleaned_raw_tokens.csv", fileEncoding = "UTF-8", row.names = FALSE)
+```
+
+With this I can count. To find the number of types, I check the word column for unique entries. For the number of tokens I check the amount of rows in the corpus. 
+
+```{r count 1}
+corpus <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/cleaned_raw_tokens.csv') 
+
+# all types
+all_types <- unique(corpus$word) # 2,639,106
+
+# all tokens
+all_tokens <- nrow(corpus) # 166,538,477
+```
+
+To create a list of the most frequent words, I group the object by word and count the results. It is also possible to just count the words and sort the list. 
+
+```{r count 2}
+# top 10k
+ten_k <- corpus %>% group_by(word) %>% count() 
+# alternative counting
+frequent_words <- corpus %>% count(word, sort = TRUE)
+write.csv(frequent_words,"/rds/projects/g/grievej-german-dialect-profiling/ordered_top_words.csv", fileEncoding = "UTF-8", row.names = FALSE)
+```
+
+Dplyr allows for other aggregations using the group_by() function:
+- Grouping by city to count how many instances each word has at each location.
+- Grouping by city and counting all tokens, which is needed to calculate relative frequency.
+- Grouping by city and only counting unique tokens (aka types).
+
+```{r count 3}
+# word counts per locations
+locations <- corpus %>% group_by(city) %>% count(word)
+write.csv(locations,"/rds/projects/g/grievej-german-dialect-profiling/word_frequencies_at_locations.csv", fileEncoding = "UTF-8", row.names = FALSE)
+
+# all tokens per location
+token_loc <- corpus %>% group_by(city) %>% count()
+# alternative counting
+token_loc_alt <- aggregate(Frequency ~ City, data = locations, sum)
+write.csv(token_loc,"/rds/projects/g/grievej-german-dialect-profiling/tokens_at_location.csv", fileEncoding = "UTF-8", row.names = FALSE)
+
+# types per location
+colnames(locations) <- c("City", "Word", "Frequency")
+types_loc <- locations %>% group_by(City) %>% summarise(count = n_distinct(Word))
+write.csv(types_loc,"/rds/projects/g/grievej-german-dialect-profiling/types_at_location.csv", fileEncoding = "UTF-8", row.names = FALSE)
+```
+
+The last step was to create a matrix spanning cities and words from these aggregations. For this, the tokenised and cleaned corpus was grouped by word and counted per city. This gives me a data frame with three columns, word, city and frequency. I can then filter for word of interest.
+
+```{r matrix 1}
+# full matrix
+trial <- corpus %>% group_by(word) %>% count(city)
+write.csv(trial,"/rds/projects/g/grievej-german-dialect-profiling/full_matrix_for_filtering.csv", fileEncoding = "UTF-8", row.names = FALSE)
+
+#get word of interest
+one_word <- trial %>% filter(word == "ich")
+colnames(one_word) <- c("Token", "City", "Frequency")
+```
+
+To avoid doing this every time, a for loop extracted all filtered top 10.000 words into a  matrix.
+For this, the city list was used. Only the city name column was kept. Both city name columns were renamed Stadt2 (City2), so that it wouldn't match any of the top 10k words. The list of the top 10k words needed to be converted using the d2v() function from the str2str package, which turns it into an atomic vector. 
+
+```{r matrix}
+# get city column from city list
+citylist <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/gsa_geo_filtered.csv') %>% select(City)
+colnames(citylist) <- c("Stadt2")
+
+# read in the full matrix
+trial <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/full_matrix_for_filtering.csv') 
+
+# read in first 10k of top words
+ordered_top_words <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/ordered_top_words.csv', nrows = 10000, header = TRUE) %>% select(word) %>% d2v()
+
+#don't name columns "City" as that word is part of the word list
+for (value in ordered_top_words) {
+  temp <- trial %>% filter(word == value) %>% select(city, n)
+  colnames(temp) <- c("Stadt2", "Frequency")
+  citylist <- merge(citylist, temp, by.x = "Stadt2", by.y = "Stadt2", all.x = TRUE)
+  colnames(citylist)[ncol(citylist)] <- value
+}
+
+write.csv(citylist,"/rds/projects/g/grievej-german-dialect-profiling/10k_matrix.csv", fileEncoding = "UTF-8", row.names = FALSE)
+```
+
+
+
+
+
