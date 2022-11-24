@@ -11,7 +11,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## Mapping with Relative Frequency
 
-This Rmd is just an updated version of the mappings in 3_first_maps to include the relative frequency. I start with the relevant libraries and the data loading.
+This Rmd is an updated version of the mappings in 3_first_maps to include the relative frequency, but also to no longer rely on the reg_count() function, but base all counts on the matrix. 
 
 ```{r libs}
 # libraries
@@ -20,59 +20,35 @@ library(dplyr) # regex
 library(tidyverse) # mapping
 library(rworldmap) # mapping
 
-# data
-corpus <- read.csv(file = './data_ling/train_70.csv')
+# data standard
+corpus <- read.csv(file = './data_ling/full_matrix_for_filtering.csv') 
+token_at_location <- read.csv(file = './data_ling/tokens_at_location.csv')
+colnames(token_at_location) <- c("City", "Tokencount") 
+longlat <- read.csv(file = './data_maps/gsa_geo_filtered.csv')
+
+# maybe
+corpus_full <- read.csv(file = './data_ling/train_70.csv')
+matrix <- read.csv(file = './data_ling/gsa_geo_filtered.csv/10k_matrix.csv', header = TRUE) 
+matrix_geo <- read.csv(file = './data_ling/gsa_geo_filtered.csv/10k_matrix_geo.csv', header = TRUE) 
 ```
 
-Then I count, as usual, the occurrence of a token. 
+Instead of counting, I can just filter the matrix for the word I am interested in. 
 
-```{r counting}
-# this counts the occurrence of a feature in the corpus
-regcount <- function(corp, word1, case = FALSE, neg = FALSE){
-  
-  # Set case/regex
-  word1 <- paste('\\b', word1, '\\b', sep ="") 
-  word1 <- regex(word1, ignore_case = !case)
-  
-  # Extract indexes with at least one hit
-  hits1 <- str_which(string = corp,  pat = word1,  negate = neg)   
-  
-  # Cities
-  cities1<- corpus$location[hits1] 
-  
-  c1<-as.data.frame(table(cities1))
-  
-  c1[is.na(c1)] <- 0
-  
-  # This will be the structures for output
-  output <- c()
-  output <- c1
-  
-  # Output results  
-  return(output)
-}
-
-reg_output <- regcount(corp = corpus$message, word1 = "nix", case = FALSE) # this is the execution of the search
-colnames(reg_output) <- c("City", "Frequency") # this gives new column names
+```{r filtering}
+#get word of interest and merge with geo data
+one_word <- corpus %>% filter(word == "ich")
+colnames(one_word) <- c("Token", "City", "Frequency")
+merger_one <- merge(one_word, longlat, by.x ="City", by.y = "City")
+colnames(merger_one) <- c("City", "Token", "Frequency", "lon", "lat")
 ```
 
-I then load in the coordinates and merge with by city detail with the count data. 
-
-```{r merging}
-longlat <- read.csv(file = './data_maps/gsa_geo_filtered.csv') # geolocation data loaded
-merger_one <- merge(reg_output, longlat, by.x ="City", by.y = "City") # this merges geolocation and counts
-
-```
-
-Now I can add the relative frequency. For that I load the counts of all tokens at all locations. This information is merged with the data and the coordinates details. With that in one object, the relative frequency can be calculated. 
+Now I can add the relative frequency. For that I merge with the counts of all tokens at all locations. This information is merged with the data and the coordinates details. With that in one object, the relative frequency can be calculated. 
 
 ```{r relative frequency}
-token_at_location <- read.csv(file = './data_ling/tokens_at_location.csv') # load token data
-colnames(token_at_location) <- c("City", "Tokencount") # give column names
 merger <- merge(merger_one, token_at_location, by.x ="City", by.y = "City")
 merger$relfreq <- (merger$Frequency/merger$Tokencount)
 merger$relfreq1000 <- (merger$relfreq*1000)
-colnames(merger) <- c("City", "Frequency", "lon", "lat", "TokenCount", "RelativeFrequency", "RelativeFrequencyThousand")
+colnames(merger) <- c("City", "Token", "Frequency", "lon", "lat", "TokenCount", "RelativeFrequency", "RelativeFrequencyThousand")
 ```
 
 Then the usual map preparation is done:
@@ -122,4 +98,32 @@ The plot can be exported using ggsave.
 ```{r export}
 ggsave("./output/mistkübel.png", width = 6.5, height = 5.5)
 ```
+
+I can also plot just the frequencies: 
+
+```{r raw frequency}
+ggplot() + geom_polygon(data = DACH_coord, 
+                        aes(x = long, y = lat, group = region),
+                        colour = "black", 
+                        size = 0.1, 
+                        fill = "gray95") + 
+  coord_map(xlim = c(4.5, 17),  
+            ylim = c(45.5, 55)) + 
+  theme_minimal() +  
+  geom_point(data = merger_one, 
+             aes(x = lon, y = lat, size = Frequency),
+             colour = "darkorchid4",
+             alpha = 0.7)  +
+  #geom_text(data = merger, aes(x = lng, y = lat, label=city), hjust=0.1, vjust=0.1, size = 2) +
+  guides(color = "none") +
+  labs(size="Frequency") +
+  ggtitle("'ich' in the GSA") +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank(),
+        plot.title = element_text(hjust = 0.5))
+```
+
 

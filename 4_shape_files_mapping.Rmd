@@ -23,7 +23,7 @@ library(dplyr)
 library(RColorBrewer)
 ```
 
-Then I load in the shape files.
+Then I load in the shape files. To know which shape files work is a bit of trial and error. I have used shape files that correspond to postal codes for Switzerland and Germany, whereas in Austria the basis for merging is Gemeindekennziffern, which roughly translates to administrative district number. 
 
 ```{r load shapes}
 germany <- st_read(dsn="/rds/projects/g/grievej-german-dialect-profiling/shape/Germany/plz-3stellig/", layer="plz-3stellig")
@@ -35,7 +35,7 @@ EU <- st_read(dsn="/rds/projects/g/grievej-german-dialect-profiling/shape/EU/Try
 #plot(switzerland)
 ```
 
-I change the projection to the same one for all of the shape files.
+I change the projection to the same one for all of the shape files. This ensures that they can all be mapped together, as different projections would project the shapes differently. WGS84 is one of the standard projections, which refers to "a datum featuring coordinates that change with time. WGS84 is defined and maintained by the United States National Geospatial-Intelligence Agency (NGA)."
 
 ```{r projection}
 germany <- st_transform(germany, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
@@ -44,7 +44,7 @@ switzerland <- st_transform(switzerland, CRS("+proj=longlat +datum=WGS84 +no_def
 EU <- st_transform(EU, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
 ```
 
-I then get the outlines I want to plot around the filled shapes.
+I then get the outlines I want to plot around the filled shapes. I do this by selecting the relevant country names / abbreviations and filtering the EU shape files for these countries. 
 
 ```{r gsa outline}
 gsa_string <- c("DE", "AT", "CH")
@@ -70,7 +70,7 @@ merger_s <- merge(s_cities, switzerland, by.x ="PLZ4_Swi", by.y = "PLZ", all.x =
 
 ```
 
-With this, I can make simple plots. (I could have made a plot without having the names in the shape files and just use the shape files, but then I couldn't combine it with the Jodel data.)
+With this, I can make simple plots. I could have made a plot without having the names in the shape files and just use the shape files, but then I couldn't combine it with the Jodel data.
 
 ```{r simple plots}
 #Austria plots quickly, just the areas where there is data
@@ -111,41 +111,21 @@ ggplot() +
   geom_sf(data = merger_s, aes(geometry = geometry), colour="black", fill=NA)
 ```
 
-To plot something I counted, I merge with count data. For safety and ease, here is the count function: 
+To plot something I counted, I get the counts from the matrix data. 
+
 ```{r count function}
-corpus <- read.csv(file = './data_ling/train_70.csv')
-
-# this counts the occurrence of a feature in the corpus
-regcount <- function(corp, word1, case = FALSE, neg = FALSE){
-  # Set case/regex
-  word1 <- paste('\\b', word1, '\\b', sep ="") 
-  word1 <- regex(word1, ignore_case = !case)
-  # Extract indexes with at least one hit
-  hits1 <- str_which(string = corp,  pat = word1,  negate = neg)   
-  # Cities
-  cities1<- corpus$location[hits1] 
-  c1<-as.data.frame(table(cities1))
-  c1[is.na(c1)] <- 0
-  # This will be the structures for output
-  output <- c()
-  output <- c1
-  # Output results  
-  return(output)
-}
-
-# this is the execution of the search
-reg_output <- regcount(corp = corpus$message, word1 = "autobahn", case = FALSE)
-
-# this gives new column names
-colnames(reg_output) <- c("City", "Frequency")
+#get word of interest and merge with geo data
+corpus <- read.csv(file = './data_ling/full_matrix_for_filtering.csv') 
+one_word <- corpus %>% filter(word == "ich")
+colnames(one_word) <- c("Token", "City", "Frequency")
 ```
 
-And now merging: 
+And now merging the counts and the shape files that already contained the city names.
 
 ```{r merge count}
-plot_ger <- merge(merger_ger, reg_output, by ="City", all.x = TRUE)
-plot_aus <- merge(merger_aus, reg_output, by ="City", all.x = TRUE)
-plot_swiz <- merge(merger_s, reg_output, by ="City", all.x = TRUE)
+plot_ger <- merge(merger_ger, one_word, by ="City", all.x = TRUE)
+plot_aus <- merge(merger_aus, one_word, by ="City", all.x = TRUE)
+plot_swiz <- merge(merger_s, one_word, by ="City", all.x = TRUE)
 ```
 
 Finally, I can produce the map.

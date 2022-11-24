@@ -23,7 +23,7 @@ This document has several parts which detail these steps:
 
 ### Location or Citylist
 
-In order to access all coordinates and relevant shape file information, all locations were extracted from the whole corpus, to make sure all locations are map-able. 
+In order to access all coordinates and relevant shape file information, all locations were extracted from the whole corpus, to make sure all locations are map-able. To do this, the corpus was read in and the unique() funtion was used to extract all unique city names. This list was then exported.
 
 ```{r unique cities}
 corpus <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/total.csv')
@@ -37,7 +37,7 @@ write.csv(city_count,"/rds/projects/g/grievej-german-dialect-profiling/city_list
 In the next step the Google API was used to extract all coordinates given the names of the cities. This was done using the ggmap package, which requires a Google API account.
 (Note that in between the unique city list and this step, I manually checked the locations: I checked whether they were on a list of GSA cities and checked (and disregarded) cities, which exist in more than one country.)
 
-First I reed in the city data and get access to the Google API.
+First I read in the city data and get access to the Google API.
 
 ```{r ggmap 1}
 library(dplyr)
@@ -52,7 +52,7 @@ s_cities <- read.csv(file = './data_maps/switzerland.csv', colClasses='character
 register_google(key = "XXX")
 ```
 
-Then I call the API and check for every name in the city lists and append the coordinates to my objects. In otder for the main function, mutate_geocode(), to work, the city lists cannot be factors. Each of these lists gets exported.
+Then I call the API and check for every name in the city lists and append the coordinates to my objects. In order for the main function, mutate_geocode(), to work, the city lists cannot be factors. So I read in the city list per country, selected only the City column and transformed it to the right format. Mutate_geocode() takes two arguments, the data frame in which the information is (and will be stored) and the column in which the location data is. It then appends to this the information it received from the Google API. Each of the final lists gets exported.
 
 ```{r ggmap 2}
 # switzerland
@@ -71,7 +71,7 @@ germany_geo <- mutate_geocode(only_g_city, City)
 write.csv(germany_geo,"germany_geo.csv", fileEncoding = "UTF-8", row.names = FALSE)
 ```
 
-As a last step they were combined into one file and exported. And also a filtered version was created, were coordinates were limited to roughly the GSA to exclude any outlier cities.
+As a last step the objects were combined into one file and exported. And also a filtered version was created, were coordinates were limited to roughly the GSA to exclude any outlier cities.
 
 ```{r ggmap 3}
 # make one file
@@ -180,7 +180,7 @@ write.csv(combined,"all_of_the_raw_tokens.csv", fileEncoding = "UTF-8", row.name
 
 ### Counting Tokens
 
-In a last preparation section, various things in the newly created token list were counted or aggregated. After loading the libraries and the object with all raw tokens, I get rid of the information like ID or time stamp, as this step just requires message and location information. I also disregard any empty cells, as the line break was not striped during tokenisation, creating many empty cells. This cleaned token list (without the other columns) is then also exported.
+In a last preparation section, various things in the newly created token list were counted or aggregated. After loading the libraries and the object with all raw tokens, I get rid of the information like ID or time stamp, as this step just requires message and location information. I also disregard any empty cells, as the line break was not striped during tokenisation, creating many empty cells. I also convert all words to lower case. This cleaned token list (without the other columns) is then also exported.
 
 ```{r cleaning token list}
 # libraries
@@ -277,7 +277,14 @@ for (value in ordered_top_words) {
 write.csv(citylist,"/rds/projects/g/grievej-german-dialect-profiling/10k_matrix.csv", fileEncoding = "UTF-8", row.names = FALSE)
 ```
 
+In a last step the geolocation information was added to the matrix.
 
+```{r matrix geo}
+longlat <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/gsa_geo_filtered.csv')
+merged <- merge(citylist, longlat, by.x ="Stadt2", by.y = "City")
+colnames(merged)[1] <- "City"
+write.csv(merged,"/rds/projects/g/grievej-german-dialect-profiling/10k_matrix_geo.csv", fileEncoding = "UTF-8", row.names = FALSE)
+```
 
 
 
