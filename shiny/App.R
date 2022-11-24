@@ -9,8 +9,10 @@ library(tidyverse) # mapping
 library(rworldmap) # mapping
 
 # Load data
-corpus <- read.csv(file = 'total.csv')
-longlat <- read.csv(file = 'all_cities.csv')
+corpus <- read.csv(file = 'full_matrix_for_filtering.csv')
+longlat <- read.csv(file = 'gsa_geo_filtered.csv')
+token_at_location <- read.csv(file = 'tokens_at_location.csv')
+colnames(token_at_location) <- c("City", "Tokencount") 
 
 # Get coordinates for GSA
 worldMap <- getMap()
@@ -46,27 +48,19 @@ ui <- pageWithSidebar(titlePanel(
 # ---- Server ----
 # Define component two: Server
 server <- function(input, output) {
-  
-  # define function
-  regcount <- function(corp, word1, case = FALSE, neg = FALSE){
-    word1 <- paste('\\b', word1, '\\b', sep ="") 
-    word1 <- regex(word1, ignore_case = !case)
-    hits1 <- str_which(string = corp,  pat = word1,  negate = neg)   
-    cities1<- corpus$location[hits1] 
-    c1<-as.data.frame(table(cities1))
-    c1[is.na(c1)] <- 0
-    output <- c()
-    output <- c1
-    return(output)
-  }
-  
-  
   output$value <- renderText({ input$my_text })
   
+  # important to note that this solution is not the best way of doing this
+  # ideally you would use reactive() instead of the observeEvent.
   observeEvent(input$button1, {
-               reg_output <- regcount(corp = corpus$message, word1 = input$my_text, case = FALSE)
-               colnames(reg_output) <- c("City", "Frequency")
-               merger <- merge(reg_output, longlat, by.x ="City", by.y = "city")
+               one_word <- corpus %>% filter(word == "ich")
+               colnames(one_word) <- c("Token", "City", "Frequency")
+               merger_one <- merge(one_word, longlat, by ="City")
+               merger <- merge(merger_one, token_at_location, by ="City")
+               merger$relfreq <- (merger$Frequency/merger$Tokencount)
+               merger$relfreq1000 <- (merger$relfreq*1000)
+               colnames(merger) <- c("City", "Token", "Frequency", "lon", "lat", "TokenCount", "RelativeFrequency", "RelativeFrequencyThousand")
+               
                output$My_Plot <- renderPlot({
                     ggplot() + geom_polygon(data = DACH_coord, 
                                             aes(x = long, y = lat, group = region),
@@ -77,11 +71,11 @@ server <- function(input, output) {
                                 ylim = c(45.5, 55)) + 
                       theme_minimal() +  
                       geom_point(data = merger, 
-                                 aes(x = lng, y = lat, size = Frequency),
+                                 aes(x = lon, y = lat, size = RelativeFrequencyThousand),
                                  colour = "darkorchid4",
                                  alpha = 0.7)  +
                       guides(color = "none") +
-                      labs(size="Frequency") +
+                      labs(size="Relative\nFrequency") +
                       theme(axis.title.x = element_blank(), 
                             axis.title.y = element_blank(),
                             axis.text.x = element_blank(),
