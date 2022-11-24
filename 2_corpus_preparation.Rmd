@@ -191,6 +191,7 @@ library(str2str) # atomic vector
 corpus <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/Archive/all_of_the_raw_tokens.csv') 
 working <- corpus %>% select(message, location)
 working <- working[!(working$message == ""), ]
+working$message <- tolower(working$message)
 colnames(working) <- c("word", "city")
 write.csv(working,"/rds/projects/g/grievej-german-dialect-profiling/cleaned_raw_tokens.csv", fileEncoding = "UTF-8", row.names = FALSE)
 ```
@@ -201,7 +202,7 @@ With this I can count. To find the number of types, I check the word column for 
 corpus <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/cleaned_raw_tokens.csv') 
 
 # all types
-all_types <- unique(corpus$word) # 2,639,106
+all_types <- unique(corpus$word) # 2,209,793
 
 # all tokens
 all_tokens <- nrow(corpus) # 166,538,477
