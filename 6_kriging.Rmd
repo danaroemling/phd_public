@@ -1,0 +1,742 @@
+---
+title: "Kriging and Maps with kriged data"
+author: "Dana"
+date: '2022-11-08'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Kriging
+
+In this markdown I will save all the code I need for the kriging and the interpolation of maps. In this markdown I have two different versions of grids: The first version is when I use a polygon based grid, which I can fill with colours of occurrences to that I can have a very roughly smoothed grid. This enables us to see a general distribution of data. The second versin of the grid is the smoothed one based on the kriging. Basically that means that instead of just counting everything for a polygon on the grid, kriging predicts values for all points on the grids, especially relevant for areas weher I don't have information. 
+
+
+### Preparation
+
+We'll start by loading the libraries & the data.
+
+```{r libs n data}
+library(sf)
+library(sp)
+library(tidyverse)
+library(gstat)
+library(stringr) # regex
+library(dplyr) # regex
+library(scales)
+library(classInt)
+library(viridis)
+library(viridisLite)
+
+# data on local
+corpus <- read.csv(file = './data_ling/full_matrix_for_filtering.csv') 
+token_at_location <- read.csv(file = './data_ling/tokens_at_location.csv')
+colnames(token_at_location) <- c("City", "Tokencount") 
+longlat <- read.csv(file = './data_maps/gsa_geo_filtered.csv')
+longlat_small <- read.csv(file = './data_maps/gsa_geo_filtered_nosmall22.csv')
+#longlat_small <- read.csv(file = './data_maps/gsa_geo_filtered_nosmall85.csv')
+
+# data on server
+corpus <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/full_matrix_for_filtering.csv') 
+token_at_location <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/tokens_at_location.csv')
+colnames(token_at_location) <- c("City", "Tokencount") 
+longlat <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/gsa_geo_filtered.csv')
+longlat_small <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/gsa_geo_filtered_nosmall22.csv')
+longlat_small <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/gsa_geo_filtered_nosmall85.csv')
+```
+
+I'll also create an object with some cities, which I can later use to orientate people on the map.
+
+```{r cities}
+cities <- data.frame(
+  City = c("Cologne", "Munich", "Vienna", "Zurich", "Berlin", "Hamburg"),
+  Long = c(6.9578, 11.5755, 16.3731, 8.5417, 13.3833, 10),
+  Lat = c(50.9422, 48.1372, 48.2083, 47.3769, 52.5167, 53.55))
+crs2 <- CRS("+init=epsg:4326")
+cities_sf <- st_as_sf(cities, coords = c("Long", "Lat"), crs = crs2)
+```
+
+
+### Grid creation
+
+First, I will create the point grid, which I will need for the kriging. 
+In order for the grid to match my data set, I need the outline of the GSA for this.
+
+```{r gsa shape}
+# shape file on local
+EU <- st_read(dsn="./data_maps/EU/Try/", layer="NUTS_RG_20M_2021_3035")
+
+# shape file on server
+EU <- st_read(dsn="/rds/projects/g/grievej-german-dialect-profiling/shape/EU/Try/", layer="NUTS_RG_20M_2021_3035")
+
+# change projection
+EU <- st_transform(EU, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+
+# get gsa outline
+#gsa_string <- c("DE", "AT", "CH")
+#gsa <- filter(EU, CNTR_CODE %in% gsa_string)
+#gsa_outline <- filter(gsa, LEVL_CODE == 0)
+#gsa_plot <- gsa_outline %>% dplyr::select(geometry) # just the outlines of the three
+#gsa_spatial <- as_Spatial(gsa_plot) # new object as spatial instead of sf
+
+# with usual code / alternative
+gsa_outline <- ne_countries(country = c("Austria", "Germany", "Switzerland"), returnclass="sf", scale = "large")
+gsa_plot <- gsa_outline %>% dplyr::select(geometry) # just the outlines of the three
+gsa_spatial <- as_Spatial(gsa_plot) # new object as spatial instead of sf
+```
+
+The grid needs to be in the same projection as the shape file I am working with. The cell size of the grid is in relation to the CRS, so to my projection, so it should be a factor of a degree, since the 4326 projection is measured in degrees. 
+As it seems to be an issue how the grid is created, this is how to create it without sf, but with sp. With this, all objects are of class S4 and spatial objects (also no polygons, as that would introduce block kriging!).
+
+```{r grid points}
+# large grid
+sp_grid <- as.data.frame(spsample(gsa_spatial,
+                                  n = 100000,
+                                  type = "regular", # systematically aligned sampling
+                                  offset = c(0.5,0.5))) # makes sure grid is the same every time
+# This grid needs A CRS and to be turned into a spatial object, which this line does:
+sp_grid_sf <- st_as_sf(sp_grid, coords=c("x1","x2"), crs = st_crs(4326))
+
+
+
+# small grid
+sp_grid_small <- as.data.frame(spsample(gsa_spatial,
+                                  n = 500,
+                                  type = "regular", # systematically aligned sampling
+                                  offset = c(0.5,0.5))) # makes sure grid is the same every time
+# This grid needs A CRS and to be turned into a spatial object, which this line does:
+sp_grid_sf_small <- st_as_sf(sp_grid_small, coords=c("x1","x2"), crs = st_crs(4326))
+```
+
+This second grid is the one we can use to plot roughly smoothed plots, so it consists of polygons.
+
+```{r grid polygon}
+# create fillable grid
+fishnet <- st_make_grid(st_transform(gsa_plot, crs=st_crs(4326)), cellsize = 0.5) %>% st_sf()
+grid <- fishnet %>% st_intersection(gsa_plot)
+```
+
+We need to do some counting and calculation, so that we get an object that we can use as the basis for the variogram and kriging. This is something that I have done in other RMDs and scripts as well, just for ease of kriging, it is also in here.
+
+```{r counting / regex}
+#get word of interest
+one_word <- corpus %>% filter(word == "guck")
+colnames(one_word) <- c("Token", "City", "Frequency")
+
+#merge with geo data
+merger_one <- merge(one_word, longlat, by.x ="City", by.y = "City")
+colnames(merger_one) <- c("City", "Token", "Frequency", "lon", "lat")
+
+# add relative frequency
+merger <- merge(merger_one, token_at_location, by.x ="City", by.y = "City")
+merger$relfreq <- (merger$Frequency/merger$Tokencount)
+merger$relfreq1000 <- (merger$relfreq*1000)
+colnames(merger) <- c("City", "Token", "Frequency", "lon", "lat", "TokenCount", "RelativeFrequency", "RelativeFrequencyThousand")
+summary(merger$TokenCount)
+merger <- merger %>% filter(TokenCount > 4000)
+
+# alternations
+one_word <- corpus %>% filter(word == "nix")
+colnames(one_word) <- c("Token", "City", "Frequency")
+second_word <- corpus %>% filter(word == "nicht")
+colnames(second_word) <- c("Token", "City", "Frequency")
+
+# combine into one and calculate proportion
+merged <- merge(one_word, second_word, by ="City", all=T)
+# introduce zeros for NAs
+merged$Frequency.x[is.na(merged$Frequency.x)] <- 0
+merged$Frequency.y[is.na(merged$Frequency.y)] <- 0
+merged$Proportion <- (merged$Frequency.x / (merged$Frequency.x + merged$Frequency.y) )
+merged$Percentage <- 100* (merged$Frequency.x / (merged$Frequency.x + merged$Frequency.y) )
+
+# merge with geo data
+merger <- merge(merged, longlat_small, by.x ="City", by.y = "City")
+```
+
+### Polygon Plots
+
+Now that I have counted, I first create an sf object of my merger data in the same projection. Then I join it with the grid. This can then be plotted. I create another grid here, as the grid I use for kriging is not polygons, but points. To be able to fill a grid I need polygons.
+
+```{r single grid plot}
+sf_merger <- st_as_sf(merger, coords = c("lon", "lat"), crs = st_crs(4326))
+filled_grid <- grid %>% st_join(sf_merger)
+
+# show that data is overlapping
+# mapview::mapview(sf_merger) + mapview::mapview(sp_grid_sf)
+
+ggplot() +
+  geom_sf(data = filled_grid, colour="gray", aes(fill=RelativeFrequencyThousand), size = 0.1) +
+  geom_sf(data = gsa_plot, aes(geometry = geometry), colour="black", fill=NA, size = 0.1) +
+  theme_minimal() +
+  scale_fill_continuous(low="mistyrose1", high="mediumpurple4", 
+                         na.value="transparent") +
+  #="transparent" or "white" are options
+  labs(fill="Rel. Frequency\nof 'drauf'") +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank())
+```
+
+I can also plot grids like I did in the beginning with proportions. 
+
+```{r double grid plot}
+# plotting alternations
+one_word <- corpus %>% filter(word == "nix")
+colnames(one_word) <- c("Token", "City", "Frequency")
+second_word <- corpus %>% filter(word == "nicht")
+colnames(second_word) <- c("Token", "City", "Frequency")
+
+# combine into one and calculate proportion
+merged <- merge(one_word, second_word, by ="City", all=T)
+# introduce zeros for NAs
+merged$Frequency.x[is.na(merged$Frequency.x)] <- 0
+merged$Frequency.y[is.na(merged$Frequency.y)] <- 0
+merged$Proportion <- (merged$Frequency.x / (merged$Frequency.x + merged$Frequency.y) )
+merged$Percentage <- 100* (merged$Frequency.x / (merged$Frequency.x + merged$Frequency.y) )
+
+# merge with geo data
+merger_double <- merge(merged, longlat, by.x ="City", by.y = "City")
+
+# plot with fill and two features
+sf_merger <- st_as_sf(merger_double, coords = c("lon", "lat"), crs = st_crs(4326))
+filled_grid <- grid %>% st_join(sf_merger)
+ggplot() +
+  geom_sf(data = gsa_plot, aes(geometry = geometry), colour="black", fill=NA, size = 0.1) +
+  geom_sf(data = filled_grid, colour="gray", aes(fill=filled_grid$Proportion), size = 0.1) +
+  theme_minimal() +
+  scale_fill_continuous(low="mistyrose1", high="mediumpurple4", 
+                        na.value="transparent") +
+  #="transparent" or "white" are options
+  labs(fill="Proportion\nof 'nix/nicht'") +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank())
+```
+
+### Variograms
+
+Now that I have the grid ready, I can get to the next step. For the kriging to work, I need to create Variograms first. A variogram is 'a function that, given a distance between two observations, returns the variance of the difference between those observations'. Simpler put, it 'describes the amount of spatial variability in the observed values'.
+
+For that to happen, I need my data. From this data, I create a Spatial Points Data Frame, which is what gstats needs in order to produce a variogram. This df contains projected coordinates. I could also create a SPDF by using coordinates(), but this wouldn't project the data.
+
+The variogram function takes an object, the data and several other arguments. The object needs to be a formula. In the case of a missing regressor, we use a constant mean model denoted by ~1 after the variable of interest. The data needs to contain the spatial information of the variable. 
+
+Cutoff: as a default, the length of the diagonal of the box spanning the data is divided by three.
+Width: Bin/Interval in the distance used by the model. 
+cloud = TRUE creates an empirical variogram / adds the cloud. Otherwise a theoretical variogram. 
+
+For projected data, Euclidian distances are computed, for unprojected great circle distances (km).
+
+This code outputs a variogram with fit line, which I then can use for the kriging. 
+
+```{r single value variogram}
+# create the data frame needed for variogram
+trial <- merger %>% dplyr::select("lon", "lat", "RelativeFrequencyThousand") #%>% na.omit()
+data <- trial[3]
+coords <- trial[1:2]
+crs <- CRS("+init=epsg:4326") # Different way of setting same CRS
+#crs <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+spdf <- SpatialPointsDataFrame(coords      = coords,
+                               data        = data, 
+                               proj4string = crs)
+
+#need to remove duplicates
+spdf = spdf[which(!duplicated(spdf@coords)), ]
+
+#st_crs(spdf)
+#coordinates(vario_data) <- ~lon+lat # this does the same to turn it into spdf object
+
+vg <- variogram(RelativeFrequencyThousand~1, data = spdf, width = 1, cutoff = 300)
+# width seems to limit my analysis, without it makes the vg easier. 
+
+vg_fit <- fit.variogram(vg, vgm("Exp")) 
+plot(vg, vg_fit)
+```
+
+This is the code if I am looking at the proportion (including kriging)
+
+```{r double value / comparison variogram & kriging}
+# for vg and krig
+trial <- merger %>% dplyr::select("lon", "lat", "Proportion") #%>% na.omit()
+data <- trial[3]
+coords <- trial[1:2]
+crs <- CRS("+init=epsg:4326") # Different way of setting same CRS
+spdf <- SpatialPointsDataFrame(coords = coords, data = data, proj4string = crs)
+spdf = spdf[which(!duplicated(spdf@coords)), ]
+vg <- variogram(Proportion~1, data = spdf, width = 1, cutoff = 300)
+vg_fit <- fit.variogram(vg, vgm("Exp")) 
+krig_comp_1 <- krige(Proportion~1, locations = spdf, newdata = sp_grid_sf_small, model = vg_fit)
+krig_comp_2 <- krige(var1.pred~1, locations = krig_comp_1, newdata = sp_grid_sf, model = vg_fit)
+```
+
+
+### Actual Kriging
+
+The actual kriging needs three inputs: 
+- The original data
+- The grid
+- The fit from the variogram, represented by nugget, sill and range values
+
+Similar to the variogram, I pass the variable I am interested in, Frequency, as part of a function with a constant mean model. I then pass the original data and the grid I produced. The last argument is the model I choose for the kriging. 
+
+
+```{r kriging}
+krig1 <- krige(RelativeFrequencyThousand~1, 
+               locations = spdf, 
+               newdata = sp_grid_sf, 
+               model = vg_fit)
+```
+
+I can also run the kriging twice, to smooth out the data more. For this, I first run the kriging on a small grid, like 50-500 cells. Then I use that and input it into a second kriging.
+
+```{r smoothing and kriging}
+krig1 <- krige(RelativeFrequencyThousand~1, 
+               locations = spdf, 
+               newdata = sp_grid_sf_small, 
+               model = vg_fit)
+
+krig2 <- krige(var1.pred~1, 
+               locations = krig1, 
+               newdata = sp_grid_sf, 
+               model = vg_fit)
+```
+
+
+### Plotting kriging / point plots
+
+As the last step I can then make a pretty map based on the kriging. First I set up the legend text.
+```{r legend text single plot}
+legend_max <- round(max(krig3$var1.pred), digits = 2)
+legend_min <- round(min(krig3$var1.pred), digits = 2)
+```
+
+```{r optional text annotation}
+# Top:
+annotate(geom="text", x = 11, y = 55.5, label="Diese Karte zeigt das Verteilung des Wortes “bummeln” \nin Deutschland, Österreich und der Schweiz. \nStärker gefärbte Regionen nutzen das Wort mehr.", size = 2, family = "Optima") 
+annotate(geom="text", x = 11, y = 55.5, label="Diese Karte zeigt das Verhältnis zwischen “schau” und “guck” \nin Deutschland, Österreich und der Schweiz. \nRegionen in lila nutzen mehr “schau” und Regionen in orange nutzen mehr “guck”.", size = 2, family = "Optima")
+# Bottom:
+# NB: Needs adjusting of legend points!! Use 51.1 and 52.2 for heights - -0.2
+annotate(geom="text", x = 11, y = 45.2, label="Daten aus der App Jodel im Zeitraum April - Juni 2017\n21 Mio. Posts gesammelt von Hovy & Purschke 2018\nKriging der relativen Häufigkeiten", size = 2, family = "Optima") 
+```
+
+
+
+```{r light mode plot cont fill purple}
+ggplot() +
+  geom_sf(data = krig3, aes(fill=var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
+  geom_sf(data = gsa_plot, aes(geometry = geometry), color="black", fill=NA, size = 0.5) +
+  geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, family = "Optima") +
+  geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4) +
+  theme_minimal() +
+  scale_fill_continuous(low="#ffffff", high="#310d59", name = "Mehr 'nicht'", labels = NULL) +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank()) +
+  theme(legend.position = c(0.90, 0.65), 
+        legend.title = element_text(size= 6, family = "Optima"), 
+        legend.text = element_text(size = 6, family = "Optima", hjust = 1),
+        legend.title.align = 0,
+        legend.key.size = unit(0.3, "cm"),
+        legend.key.width = unit(0.4,"cm")) +
+  annotate(geom="text", x = 16.6, y = 52.4, label=legend_max, size = 1.5, family = "Optima") +
+  annotate(geom="text", x = 16.6, y = 51.3, label=legend_min, size = 1.5, family = "Optima") +
+  annotate(geom="text", x = 16.2, y = 49.8, label="danaroemling.com", size = 2,5, family = "Optima") +
+  annotate(geom="text", x = 16.2, y = 49.6, label="03/04/2023", size = 2,5, family = "Optima")
+```
+
+```{r light mode plot 7 bands purple}
+pal_light_1 <- c("#ffffff", "#dcd3e2", "#b9a8c5", "#977fa9",  "#75588e", "#533373", "#310d59")
+ggplot() +
+  geom_sf(data = krig1, aes(fill=var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
+  geom_sf(data = gsa_plot, aes(geometry = geometry), color="black", fill=NA, size = 0.5) +
+  geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, family = "Optima") +
+  geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4) +
+  theme_minimal() +
+  scale_fill_stepsn(colours = pal_light_1, 
+                    breaks = seq(min(krig3$var1.pred), max(krig3$var1.pred), length = 8),
+                    values = seq(0.5/14, 13/14, length = 7),
+                    labels = NULL) +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank()) +
+  theme(legend.position = c(0.90, 0.65), 
+        legend.title = element_text(size = 6, family = "Optima"), 
+        legend.text = element_text(size = 6, family = "Optima", hjust = 1),
+        legend.title.align = 0,
+        legend.key.size = unit(0.3, "cm"),
+        legend.key.width = unit(0.4,"cm")) +
+  annotate(geom="text", x = 16.6, y = 52.4, label=legend_max, size = 1.5, family = "Optima") +
+  annotate(geom="text", x = 16.6, y = 51.3, label=legend_min, size = 1.5, family = "Optima") +
+  annotate(geom="text", x = 16.2, y = 49.8, label="danaroemling.com", size = 2.5, family = "Optima") +
+  annotate(geom="text", x = 16.2, y = 49.6, label="03/04/2023", size = 2.5, family = "Optima") +
+  labs(fill = "Mehr 'nichts'")
+```
+
+```{r dark mode plot cont fill green}
+ggplot() +
+  geom_sf(data = krig1, aes(fill = var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
+  geom_sf(data = gsa_plot, aes(geometry = geometry), color = "snow2", fill = NA, size = 0.5) +
+  geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, color = "snow", family = "Optima") +
+  geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4, color = "snow") +
+  theme_minimal() +
+  scale_fill_continuous(low="#1b1b1b", high="#73ffc2", name = "Mehr 'nicht'", labels = NULL) +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank()) +
+  theme(legend.position = c(0.90, 0.65), 
+        legend.title = element_text(size = 7, color = "snow", family = "Optima"), 
+        legend.text = element_text(size = 6, color = "snow", family = "Optima", hjust = 1),
+        legend.title.align = 0,
+        panel.background = element_rect(fill = "gray10", color = "gray10"),
+        plot.background = element_rect(fill = "gray10", color = "gray10"),
+        legend.key.size = unit(0.3, "cm"),
+        legend.key.width = unit(0.4,"cm")) +
+  annotate(geom="text", x = 16.6, y = 52.4, 
+           label=legend_max, size = 1.5, family = "Optima", color = "snow") +
+  annotate(geom="text", x = 16.6, y = 51.3, 
+           label=legend_min, size = 1.5, family = "Optima", color = "snow") +
+  annotate(geom="text", x = 16.2, y = 49.8, 
+           label="danaroemling.com", size = 2.5, color = "snow", family = "Optima") +
+  annotate(geom="text", x = 16.2, y = 49.6, 
+           label="28/02/2023", size = 2.5, color = "snow", family = "Optima")
+```
+
+```{r dark mode plot 7 bands green}
+pal_new_green <- c("#1b1b1b", "#2b3b33", "#3a5e4d", "#498468", "#57ab85", "#65d4a3", "#73ffc2")
+ggplot() +
+  geom_sf(data = krig3, aes(fill = var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
+  geom_sf(data = gsa_plot, aes(geometry = geometry), color = "snow2", fill = NA, size = 0.5) +
+  geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, color = "snow", family = "Optima") +
+  geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4, color = "snow") +
+  theme_minimal() +
+  scale_fill_stepsn(colours = pal_new_green, 
+                    breaks = seq(min(krig3$var1.pred), max(krig3$var1.pred), length = 8),
+                    values = seq(0.5/14, 13/14, length = 7),
+                    labels = NULL) +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank()) +
+  theme(legend.position = c(0.90, 0.65), 
+        legend.title = element_text(size = 6, color = "snow", family = "Optima"), 
+        legend.text = element_text(size = 6, color = "snow", family = "Optima", hjust = 1),
+        legend.title.align = 0,
+        panel.background = element_rect(fill = "gray10", color = "gray10"),
+        plot.background = element_rect(fill = "gray10", color = "gray10"),
+        legend.key.size = unit(0.3, "cm"),
+        legend.key.width = unit(0.4,"cm")) +
+  annotate(geom="text", x = 16.6, y = 52.4, 
+           label=legend_max, size = 1.5, family = "Optima", color = "snow") +
+  annotate(geom="text", x = 16.6, y = 51.3, 
+           label=legend_min, size = 1.5, family = "Optima", color = "snow") +
+  annotate(geom="text", x = 16.2, y = 49.8, 
+           label="danaroemling.com", size = 2.5, color = "snow", family = "Optima") +
+  annotate(geom="text", x = 16.2, y = 49.6, 
+           label="20/02/2023", size = 2.5, color = "snow", family = "Optima") +
+  labs(fill = "Mehr 'nichts'") 
+```
+
+```{r dark mode isogloss plot green}
+summary(krig3$var1.pred)
+ggplot() +
+  geom_sf(data = krig3, aes(fill = var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
+  geom_sf(data = gsa_plot, aes(geometry = geometry), color = "snow2", fill = NA, size = 0.5) +
+  geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, color = "snow", family = "Optima") +
+  geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4, color = "snow") +
+  theme_minimal() +
+  # this needs adjusting at breaks below
+  scale_fill_steps(low="#1b1b1b", high="#73ffc2", breaks = 10.9, labels = NULL) +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank()) +
+  theme(legend.position = c(0.90, 0.65), 
+        legend.title = element_text(size = 6, color = "snow", family = "Optima"), 
+        legend.text = element_text(size = 6, color = "snow", family = "Optima", hjust = 1),
+        legend.title.align = 0,
+        panel.background = element_rect(fill = "gray10", color = "gray10"),
+        plot.background = element_rect(fill = "gray10", color = "gray10"),
+        legend.key.size = unit(0.3, "cm"),
+        legend.key.width = unit(0.4,"cm")) +
+  annotate(geom="text", x = 16.6, y = 52.4, 
+           label=legend_max, size = 1.5, family = "Optima", color = "snow") +
+  annotate(geom="text", x = 16.6, y = 51.3, 
+           label=legend_min, size = 1.5, family = "Optima", color = "snow") +
+  annotate(geom="text", x = 16.2, y = 49.8, 
+           label="danaroemling.com", size = 2.5, color = "snow", family = "Optima") +
+  annotate(geom="text", x = 16.2, y = 49.6, 
+           label="03/04/2023", size = 2.5, color = "snow", family = "Optima") +
+  labs(fill = "Mehr 'nichts'")
+```
+
+```{r light mode plot N bands purple}
+ggplot() +
+  geom_sf(data = krig1, aes(fill=var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
+  geom_sf(data = gsa_plot, aes(geometry = geometry), color="black", fill=NA, size = 0.5) +
+  geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, family = "Optima") +
+  geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4) +
+  theme_minimal() +
+  scale_fill_steps(low="#ffffff", high="#310d59", n.breaks = 30, labels = NULL) +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank()) +
+  theme(legend.position = c(0.90, 0.65), 
+        legend.title = element_text(size = 6, family = "Optima"), 
+        legend.text = element_text(size = 6, family = "Optima", hjust = 1),
+        legend.title.align = 0,
+        legend.key.size = unit(0.3, "cm"),
+        legend.key.width = unit(0.4,"cm")) +
+  annotate(geom="text", x = 16.6, y = 52.4, label=legend_max, size = 1.5, family = "Optima") +
+  annotate(geom="text", x = 16.6, y = 51.3, label=legend_min, size = 1.5, family = "Optima") +
+  annotate(geom="text", x = 16.2, y = 49.8, label="danaroemling.com", size = 2.5, family = "Optima") +
+  annotate(geom="text", x = 16.2, y = 49.6, label="03/04/2023", size = 2.5, family = "Optima") +
+  labs(fill = "Mehr 'nichts'") 
+```
+
+```{r dark mode plot N bands green}
+# Change the number of n.breaks = to adjust number of break points
+ggplot() +
+  geom_sf(data = krig3, aes(fill = var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
+  geom_sf(data = gsa_plot, aes(geometry = geometry), color = "snow2", fill = NA, size = 0.5) +
+  geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, color = "snow", family = "Optima") +
+  geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4, color = "snow") +
+  theme_minimal() +
+  scale_fill_steps(low="#1b1b1b", high="#73ffc2", n.breaks = 30, labels = NULL) +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank()) +
+  theme(legend.position = c(0.90, 0.65), 
+        legend.title = element_text(size = 6, color = "snow", family = "Optima"), 
+        legend.text = element_text(size = 6, color = "snow", family = "Optima", hjust = 1),
+        legend.title.align = 0,
+        panel.background = element_rect(fill = "gray10", color = "gray10"),
+        plot.background = element_rect(fill = "gray10", color = "gray10"),
+        legend.key.size = unit(0.3, "cm"),
+        legend.key.width = unit(0.4,"cm")) +
+  annotate(geom="text", x = 16.6, y = 52.4, 
+           label=legend_max, size = 1.5, family = "Optima", color = "snow") +
+  annotate(geom="text", x = 16.6, y = 51.3, 
+           label=legend_min, size = 1.5, family = "Optima", color = "snow") +
+  annotate(geom="text", x = 16.2, y = 49.8, 
+           label="danaroemling.com", size = 2.5, color = "snow", family = "Optima") +
+  annotate(geom="text", x = 16.2, y = 49.6, 
+           label="03/04/2023", size = 2.5, color = "snow", family = "Optima") +
+  labs(fill = "Mehr 'nichts'")
+```
+
+This code is probably not used, but just in case I can also do quantile breaks instead of equal breaks.
+
+```{r plot dark mode quantile breaks}
+# class intervals
+quantiles <- classIntervals(krig1$var1.pred, 
+                              n = 5, 
+                              style = "quantile")
+quantiles
+krig1 <- mutate(krig1, 
+                quantile = cut(var1.pred, 
+                               quantiles$brks,
+                               include.lowest = TRUE,
+                               dig.lab=4)) 
+krig1$quantile <- as.factor(krig1$quantile)
+
+# dark mode intervals
+scale_fill_greens <- function(...){
+  ggplot2:::manual_scale(
+    'fill', 
+    values = c("#1b1b1b", "#233a28", "#255c35", "#208042", "#00a54f"),
+    ...
+  )
+}
+
+ggplot() +
+  geom_sf(data = krig1, aes(fill = quantile), shape = 21, size = 1, stroke = 0, lwd = 0) +
+  geom_sf(data = gsa_plot, aes(geometry = geometry), color = "snow2", fill = NA, size = 0.5) +
+  geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, color = "snow", family = "Optima") +
+  geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4, color = "snow") +
+  theme_minimal() +
+  scale_fill_greens() +
+  #scale_fill_brewer(palette = "Greens") +
+  #scale_fill_viridis(option = "viridis", discrete = TRUE) +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank()) +
+  theme(legend.position = c(0.90, 0.65), 
+        legend.title = element_text(size = 8, color = "snow", family = "Optima"), 
+        legend.text = element_text(size = 6, color = "snow", family = "Optima", hjust = 1),
+        legend.title.align = 0,
+        panel.background = element_rect(fill = "gray10", color = "gray10"),
+        plot.background = element_rect(fill = "gray10", color = "gray10")) +
+  annotate(geom="text", x = 16.2, y = 49.8, label="danaroemling.com", size = 3, color = "snow", family = "Optima") +
+  annotate(geom="text", x = 16.2, y = 49.6, label="20/02/2023", size = 3, color = "snow", family = "Optima") +
+  labs(fill = "Mehr 'nichts'")
+```
+
+I can also map kriged comparisons. In theory, the tipping point for the proportion in these maps is at 50% or 0.5. 
+
+```{r legend text comparison plot}
+legend_max_c <- round(max(krig_comp_2$var1.pred), digits = 2)
+legend_min_c <- round(min(krig_comp_2$var1.pred), digits = 2)
+```
+
+```{r light mode comparison orange purple}
+summary(krig_comp_2$var1.pred)
+ggplot() +
+    geom_sf(data = krig_comp_2, aes(fill=var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
+    geom_sf(data = gsa_plot, aes(geometry = geometry), color="black", fill=NA, size = 0.5) +
+    geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, family = "Optima") +
+    geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4) +
+    theme_minimal() +
+    scale_fill_steps2(low = "#E0961A", mid = "#ffffff", high = "#310d59", midpoint = 0.5, n.breaks = 15, labels = NULL) +
+    theme(axis.title.x = element_blank(), 
+          axis.title.y = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          panel.grid.major = element_blank()) +
+    theme(legend.position = c(0.90, 0.65), 
+          legend.title = element_text(size = 6, family = "Optima"),
+          legend.text = element_text(size = 6, family = "Optima", hjust = 1),
+          legend.title.align = 0,
+          legend.key.size = unit(0.3, "cm"),
+          legend.key.width = unit(0.4,"cm")) +
+    annotate(geom="text", x = 16.6, y = 52.4, label=legend_max_c, size = 1.5, family = "Optima") +
+    annotate(geom="text", x = 16.6, y = 51.3, label=legend_min_c, size = 1.5, family = "Optima") +
+    annotate(geom="text", x = 16.2, y = 49.8, label="danaroemling.com", size = 2.5, family = "Optima") +
+    annotate(geom="text", x = 16.2, y = 49.6, label="03/04/2023", size = 2.5, family = "Optima") +
+    labs(fill = "Schau / Guck")
+```
+
+```{r light mode comparison orange purple legend w word}
+summary(krig_comp_2$var1.pred)
+ggplot() +
+    geom_sf(data = krig_comp_2, aes(fill=var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
+    geom_sf(data = gsa_plot, aes(geometry = geometry), color="black", fill=NA, size = 0.5) +
+    geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, family = "Optima") +
+    geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4) +
+    theme_minimal() +
+    scale_fill_steps2(low = "#E0961A", mid = "#ffffff", high = "#310d59", midpoint = 0.5, n.breaks = 15, labels = NULL) +
+    theme(axis.title.x = element_blank(), 
+          axis.title.y = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          panel.grid.major = element_blank()) +
+    theme(legend.position = c(0.90, 0.65), 
+          legend.title = element_text(size = 6, family = "Optima"),
+          legend.text = element_text(size = 6, family = "Optima", hjust = 1),
+          legend.title.align = 0,
+          legend.key.size = unit(0.3, "cm"),
+          legend.key.width = unit(0.4,"cm")) +
+    annotate(geom="text", x = 16.6, y = 52.4, label="guck", size = 1.5, family = "Optima") +
+    annotate(geom="text", x = 16.6, y = 51.3, label="schau", size = 1.5, family = "Optima") +
+    annotate(geom="text", x = 16.2, y = 49.8, label="danaroemling.com", size = 2.5, family = "Optima") +
+    annotate(geom="text", x = 16.2, y = 49.6, label="03/04/2023", size = 2.5, family = "Optima") +
+    labs(fill = "Distribution")
+```
+
+```{r dark mode comparison green yellow}
+summary(krig_comp_2$var1.pred)
+ggplot() +
+    geom_sf(data = krig_comp_2, aes(fill=var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
+    geom_sf(data = gsa_plot, aes(geometry = geometry), color="snow2", fill=NA, size = 0.5) +
+    geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, color = "snow", family = "Optima") +
+    geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4, color = "snow") +
+    theme_minimal() +
+    scale_fill_steps2(low = "#ECE74F", mid = "#111111", high = "#73ffc2", midpoint = 0.5, n.breaks = 15, labels = NULL) +
+    theme(axis.title.x = element_blank(), 
+          axis.title.y = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          panel.grid.major = element_blank()) +
+    theme(legend.position = c(0.90, 0.65), 
+          legend.title = element_text(size = 6, color = "snow", family = "Optima"),
+          legend.text = element_text(size = 6, color = "snow", family = "Optima", hjust = 1),
+          legend.title.align = 0,
+          panel.background = element_rect(fill = "gray10", color = "gray10"),
+          plot.background = element_rect(fill = "gray10", color = "gray10"),
+          legend.key.size = unit(0.3, "cm"),
+          legend.key.width = unit(0.4,"cm")) +
+    annotate(geom="text", x = 16.6, y = 52.4, label=legend_max_c, size = 1.5, family = "Optima", color = "snow") +
+    annotate(geom="text", x = 16.6, y = 51.3, label=legend_min_c, size = 1.5, family = "Optima", color = "snow") +
+    annotate(geom="text", x = 16.2, y = 49.8, label="danaroemling.com", size = 2.5, color = "snow", family = "Optima") +
+    annotate(geom="text", x = 16.2, y = 49.6, label="03/04/2023", size = 2.5, color = "snow", family = "Optima") +
+    labs(fill = "Schau / Guck")
+```
+
+```{r dark mode comparison green yellow legend w word}
+summary(krig_comp_2$var1.pred)
+ggplot() +
+    geom_sf(data = krig_comp_2, aes(fill=var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
+    geom_sf(data = gsa_plot, aes(geometry = geometry), color="snow2", fill=NA, size = 0.5) +
+    geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, color = "snow", family = "Optima") +
+    geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4, color = "snow") +
+    theme_minimal() +
+    scale_fill_steps2(low = "#ECE74F", mid = "#111111", high = "#73ffc2", midpoint = 0.5, n.breaks = 15, labels = NULL) +
+    theme(axis.title.x = element_blank(), 
+          axis.title.y = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          panel.grid.major = element_blank()) +
+    theme(legend.position = c(0.90, 0.65), 
+          legend.title = element_text(size = 6, color = "snow", family = "Optima"),
+          legend.text = element_text(size = 6, color = "snow", family = "Optima", hjust = 1),
+          legend.title.align = 0,
+          panel.background = element_rect(fill = "gray10", color = "gray10"),
+          plot.background = element_rect(fill = "gray10", color = "gray10"),
+          legend.key.size = unit(0.3, "cm"),
+          legend.key.width = unit(0.4,"cm")) +
+    annotate(geom="text", x = 16.6, y = 52.4, label="schau", size = 1.5, family = "Optima", color = "snow") +
+    annotate(geom="text", x = 16.6, y = 51.3, label="guck", size = 1.5, family = "Optima", color = "snow") +
+    annotate(geom="text", x = 16.2, y = 49.8, label="danaroemling.com", size = 2.5, color = "snow", family = "Optima") +
+    annotate(geom="text", x = 16.2, y = 49.6, label="03/04/2023", size = 2.5, color = "snow", family = "Optima") +
+    labs(fill = "Distribution")
+```
+
+
+There are then two ways of outputting files. Either the normal ggsave or if I need the better versions, I should export as tiff.
+
+```{r saving}
+ggsave("./output/3.png", width = 6.5, height = 5.5)
+
+or
+
+tiff("4.tiff", units="in", width=9, height=9, res=300)
+# insert ggplot code
+ggplot() +
+  geom_sf(data = krig1, aes(fill=var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
+  geom_sf(data = gsa_plot, aes(geometry = geometry), color="black", fill=NA, size = 0.5) +
+  geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15) +
+  geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4) +
+  theme_minimal() +
+  #scale_colour_gradientn(colours = c("blue", "white","red")) +
+  scale_fill_continuous(low="white", high="dodgerblue4", name = "Variable") +
+  #scale_fill_continuous(low="white", high="darkseagreen4") +
+  #scale_fill_continuous(low="darkseagreen1", high="black") +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank()) +
+  theme(legend.position = c(0.95, 0.65), legend.title = element_text(size=10), legend.title.align = 0) +
+  annotate(geom="text", x = 16.2, y = 49.8, label="danaroemling.com", size=2.3)
+
+dev.off()
+```

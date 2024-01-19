@@ -1,0 +1,369 @@
+---
+title: "Cultural Regions Analysis"
+author: "Dana Roemling"
+date: '2024-01-18'
+output: html_document
+toc: yes
+toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Cultural Regions in the Jodel Corpus
+
+In this markdown I write up the code used to generate the maps for the cultural regions analysis.
+
+```{r setup_2, echo=FALSE, message=FALSE, results='hide', warning=FALSE}
+# libs
+library(rnaturalearthhires)
+library(rnaturalearth)
+library(dplyr)
+library(sf)
+library(sp)
+library(FactoMineR) 
+library(spdep)
+library(tidyverse) 
+library(ggdendro)
+library(RColorBrewer)
+library(ggwordcloud)
+
+# data
+# matrix of every word at every location
+matrix_geo <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/10k_matrix_geo.csv', header = TRUE) 
+## replace NA with zero
+matrix_geo[is.na(matrix_geo)] <- 0
+# token amount per location data frame
+token_at_location <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/tokens_at_location.csv')
+# old matrix with relative frequencies for filtering (no country code)
+rel_freq <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/rel_freq_alllonglat.csv')
+# stop word list
+stopwords <- tolower(readLines("/rds/projects/g/grievej-german-dialect-profiling/stopwords/stops2.txt"))
+# country code lists
+austria <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/austria_geo.csv', header = TRUE) 
+switzerland <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/switzerland_geo.csv', header = TRUE) germany <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/germany_geo.csv', header = TRUE) 
+
+
+# later data sets / generated through this analysis
+matrix_read_in <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/matrix_cities_x_variables_rel_freq.csv', header = TRUE) 
+
+matrix_read_in_country <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/matrix_cities_x_variables_rel_freq_countries.csv', header = TRUE) 
+```
+
+These are the inputs for the mapping basics
+
+```{r mapping_setup}
+ger_outline <- ne_countries(country = "Germany", returnclass="sf", scale = "large")
+ger_plot <- ger_outline %>% dplyr::select(geometry) # just the outlines of the three
+ger_spatial <- as_Spatial(ger_plot) # new object as spatial instead of sf
+
+cities <- data.frame(
+  City = c("Köln", "München", "Berlin", "Hamburg"),
+  Long = c(6.9578, 11.5755, 13.3833, 10),
+  Lat = c(50.9422, 48.1372, 52.5167, 53.55))
+crs2 <- CRS("+init=epsg:4326")
+cities_sf <- st_as_sf(cities, coords = c("Long", "Lat"), crs = crs2)
+
+gsa_outline <- ne_countries(country = c("Austria", "Germany", "Switzerland"), returnclass="sf", scale = "large")
+gsa_plot <- gsa_outline %>% dplyr::select(geometry) # just the outlines of the three
+gsa_spatial <- as_Spatial(gsa_plot) # new object as spatial instead of sf
+
+sp_grid <- as.data.frame(spsample(gsa_spatial,
+                                  n = 100000,
+                                  type = "regular", # systematically aligned sampling
+                                  offset = c(0.5,0.5))) # makes sure grid is the same every time
+sp_grid_sf <- st_as_sf(sp_grid, coords=c("x1","x2"), crs = st_crs(4326))
+
+sp_grid_small <- as.data.frame(spsample(gsa_spatial,
+                                        n = 500,
+                                        type = "regular", # systematically aligned sampling
+                                        offset = c(0.5,0.5))) # makes sure grid is the same every time
+sp_grid_sf_small <- st_as_sf(sp_grid_small, coords=c("x1","x2"), crs = st_crs(4326))
+```
+
+## Data Wrangling
+
+In order for this analysis to work, I need the location information together with the relative frequency information. 
+So I load the usual matrix with counts including the geolocation and then merge with the token count per location data frame. 
+Through that I can calculate the relative frequency for each word at each location.
+
+```{r rel_freq_data}
+matrix_geo_token <- merge(matrix_geo, token_at_location, by.x = "City", by.y = "city")
+names(matrix_geo_token)[names(matrix_geo_token) == 'n.y'] <- 'Tokencount'
+matrix_geo_token <- matrix_geo_token %>% relocate("lon", .after = "City")
+matrix_geo_token <- matrix_geo_token %>% relocate("lat", .after = "City")
+matrix_geo_token <- matrix_geo_token %>% relocate("Tokencount", .after = "lon")
+# the first four columns are city, lat, lon, tokencount
+new_df <- matrix_geo_token %>% select("City","lon", "lat", "Tokencount")
+
+for (column_name in colnames(matrix_geo_token[,5:ncol(matrix_geo_token)])) {
+  new_df[column_name] <- matrix_geo_token[column_name]/matrix_geo_token$Tokencount
+}
+
+# double check values with rel_freq matrix
+x1 <- rel_freq %>% filter(City == "Chemnitz")
+x2 <- x1 %>% filter(Word == "hund")
+x3 <- new_df %>% filter(City == "Chemnitz")
+x4 <- x3 %>% select("hund")
+
+# export new data set 
+# write.csv(new_df, "/rds/projects/g/grievej-german-dialect-profiling/matrix_cities_x_variables_rel_freq.csv", row.names=FALSE)
+```
+
+Now that the relative frequency and geolocation data is in the big matrix, I can further prepare the data.
+For this analysis, I want to filter by country, so I need to add the country code in.
+
+```{r data_prep_for_PCA}
+# reading in adds X and period - remove
+names(matrix_read_in) <- gsub("\\.", "", names(matrix_read_in))
+names(matrix_read_in) <- gsub("\\<X", "", names(matrix_read_in))
+# filter for needs of analysis
+# Current best settings: 10k tokencount and 2k top words
+matrix_filtered <- matrix_read_in %>% filter(Tokencount > 10000)
+matrix_filtered <- matrix_filtered %>% dplyr::select(1:2005)
+matrix <- matrix_filtered
+
+# single out Germany only
+## add country codes in
+matrix_read_in["Austria"] <- 0
+matrix_read_in <- matrix_read_in %>% relocate("Austria", .after = "City")
+matrix_read_in["Germany"] <- 0
+matrix_read_in <- matrix_read_in %>% relocate("Germany", .after = "City")
+matrix_read_in["Switzerland"] <- 0
+matrix_read_in <- matrix_read_in %>% relocate("Switzerland", .after = "City")
+
+## loop over city names to check if they are in either of the three data sets
+for (city in matrix_read_in$City) {
+  if (city %in% austria$City) {
+    temp_loc <- city
+    temp_index <- which(matrix_read_in$City == temp_loc)
+    temp_score <- 1
+    matrix_read_in[temp_index, 4] <- temp_score
+  }
+  if (city %in% switzerland$City) {
+    temp_loc <- city
+    temp_index <- which(matrix_read_in$City == temp_loc)
+    temp_score <- 1
+    matrix_read_in[temp_index, 2] <- temp_score
+  }
+  if (city %in% germany$City) {
+    temp_loc <- city
+    temp_index <- which(matrix_read_in$City == temp_loc)
+    temp_score <- 1
+    matrix_read_in[temp_index, 3] <- temp_score
+  }
+}
+
+# export new data set 
+# write.csv(matrix_read_in, "/rds/projects/g/grievej-german-dialect-profiling/matrix_cities_x_variables_rel_freq_countries.csv", row.names=FALSE)
+```
+
+Now that I can filter by country, I prepare the matrix for Germany.
+
+```{r data_prep_for_PCA_2}
+names(matrix_read_in_country) <- gsub("\\.", "", names(matrix_read_in_country))
+names(matrix_read_in_country) <- gsub("\\<X", "", names(matrix_read_in_country))
+matrix_filtered <- matrix_read_in_country %>% filter(Tokencount > 10000)
+matrix_filtered <- matrix_filtered %>% dplyr::select(1:2500)
+matrix <- matrix_filtered
+
+matrix_ger <- matrix_filtered %>% filter(Germany == 1) %>% dplyr::select(-Austria, -Switzerland, -Germany)
+# liechtenstein drop
+drop <- 370
+matrix_ger <- matrix_ger %>% filter(!row_number() %in% drop)
+
+# other singled out countries
+matrix_aus <- matrix_filtered %>% filter(Austria == 1) %>% select(-Germany, -Switzerland)
+matrix_swi <- matrix_filtered %>% filter(Switzerland == 1) %>% select(-Austria, -Germany)
+matrix_GAT <- matrix_filtered %>% filter(Germany == 1 | Austria == 1)  
+
+# function words removed
+stopwords <- tolower(readLines("/rds/projects/g/grievej-german-dialect-profiling/stopwords/stops2.txt"))
+for (word in stopwords) {
+  if (word %in% colnames(matrix_ger)) {
+    matrix_ger <- matrix_ger %>% dplyr::select(-word)
+  }
+}
+
+# analysis matrix
+matrix_ger <- matrix_ger %>% dplyr::select(1:2004)
+```
+
+I could now run a PCA on the raw data, however this is quite messy. 
+
+```{r PCA_1}
+# PCA for Germany
+first_pca = PCA(matrix_ger[5:ncol(matrix_ger)], scale.unit=F, ncp=5, graph=T)
+
+# this is per feature
+first <- as.data.frame(first_pca$var$coord)
+first_transposed <- as.data.frame(t(first))
+combined <- bind_rows(matrix_ger, first_transposed)
+
+# this is per city - used
+first_city <- as.data.frame(first_pca$ind$coord)
+combined_city <- cbind(matrix_ger, first_city)
+combined_city_sf <- st_as_sf(combined_city, coords = c("lon", "lat"), crs = 4326)
+```
+
+
+## Spatial Analysis
+
+Now that I have the data set out, I can run the spatial analysis.
+Here, that means calculating Moran's I and Getid-Ord z-scores. The latter smoothes out the data for me, but also provide me with an idea of the regionality, or the underlying regional signal, in the data.
+
+```{r moransi}
+morans_matrix <- matrix_ger
+morans_coord <- as.matrix(data.frame(LONG = matrix_ger$lon, LAT = matrix_ger$lat))
+neighbours <- knn2nb(knearneigh(morans_coord, k=10, longlat=TRUE))
+neighbours <- include.self(neighbours)
+neighbours_weighted <- nb2listw(neighbours, style="B")
+
+options(scipen=999)
+morans_df <- data.frame(matrix(ncol = 6, nrow = 0))
+colnames(morans_df) <- c("word", "I", "p","expectation", "variance", "stdev")
+
+for (i in 5:ncol(morans_matrix))
+{
+  print(round(100*i/ncol(morans_matrix),2))
+  mtemp <- moran.test(morans_matrix[,i], neighbours_weighted, rand=TRUE, rank=FALSE, alternative="greater")	
+  morans_df[i-5,"word"] <- colnames(morans_matrix[i])
+  morans_df[i-5,"I"] <- mtemp$estimate[1]
+  morans_df[i-5,"p"] <- round(mtemp$p.value,10)
+  morans_df[i-5,"expectation"] <- mtemp$estimate[2]
+  morans_df[i-5,"variance"] <- mtemp$estimate[3]
+  morans_df[i-5,"stdev"] <- mtemp$statistic
+}
+
+# export new data set 
+#write.csv(morans_df, "/rds/projects/g/grievej-german-dialect-profiling/TEMP_moransi.csv", row.names=FALSE)
+```
+
+```{r getis_ord}
+getis_ord <- matrix_ger
+
+for (i in 5:ncol(matrix_ger))
+{
+  temp <- localG(as.numeric(matrix_ger[,i]), neighbours_weighted)
+  temp <- round(temp, 3)
+  getis_ord[,i] <- temp
+}
+
+# export new data set 
+#write.csv(getis_ord, "/rds/projects/g/grievej-german-dialect-profiling/TEMP_getisord.csv", row.names=FALSE)
+```
+
+Now, the new scores can be used. Here the Getis-Ord is used in the PCA.
+
+```{r PCA_2}
+pca_spatial <- PCA(getis_ord[5:ncol(getis_ord)], scale.unit=F, ncp=5, graph=T)
+first_city <- as.data.frame(pca_spatial$ind$coord)
+combined_city <- cbind(matrix_ger, first_city)
+combined_city_sf <- st_as_sf(combined_city, coords = c("lon", "lat"), crs = 4326)
+```
+
+And this can then be mapped.
+
+```{r map}
+ggplot() +
+  geom_sf(data = ger_plot, aes(geometry = geometry), color="black", fill="lightgrey", size = 0.5) +
+  geom_sf(data = combined_city_sf, aes(fill=Dim.5), shape = 21, size = 5, stroke = 0, lwd = 0) +
+  geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, family = "Optima") +
+  geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4) +
+  theme_minimal() +
+  #scale_fill_gradient(low = "seagreen3", high = "mediumpurple3") +
+  scale_fill_gradient2(low = "darkred", mid = "white", high = "darkblue", midpoint = 0) +
+  ggtitle("Dimension 5") +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank(),
+        plot.title = element_text(size = 10, hjust = 0.5, vjust = -7)) +
+  theme(legend.position = "none") 
+```
+
+Note: http://factominer.free.fr/question/FAQ.html
+Loadings are not in this PCA, but scores (i.e. principal coordinates) are in pca$ind$coord and in pca$var$coord - ind is the cities and var is the actual words. 
+
+```{r dendro_start}
+dendro_base <- as.data.frame(pca_spatial$var$coord)
+ddist <- dist(dendro_base, method = "euclidean", p = 2)
+dendro <- hclust(ddist, method = "ward.D2")
+dendro_gg <- dendro_data(dendro, type = "rectangle") 
+
+ggplot(segment(dendro_gg)) +
+  geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) +
+  geom_text(aes(x = x, y = y, label = label, angle = -90, hjust = 0), data= label(dendro_gg)) +
+  coord_flip() +
+  scale_y_reverse(expand = c(0.2, 0)) +
+  theme_dendro()
+```
+
+I can also create clusters of the variables. This needs the hclust first and then I can have a look at the clusters. The code below uses the variables as basis for the clusters. 
+
+```{r clusters}
+dendro_base <- as.data.frame(pca_spatial$var$coord)
+ddist <- dist(dendro_base, method = "euclidean", p = 2)
+cluster_base <- hclust(ddist, method = "ward.D2")
+clusters <- cutree(cluster_base, k = 5)
+
+# looking at variables
+pca_clustered_var <- dendro_base %>% mutate(cluster = clusters)
+group1 <- pca_clustered_var %>% filter(cluster == 1)
+group1$word <- rownames(group1)
+group1_string <- rownames(group1)
+group2 <- pca_clustered_var %>% filter(cluster == 2)
+group2_string <- rownames(group2)
+group2$word <- rownames(group2)
+group3 <- pca_clustered_var %>% filter(cluster == 3)
+group3_string <- rownames(group3)
+group3$word <- rownames(group3)
+group4 <- pca_clustered_var %>% filter(cluster == 4)
+group4_string <- rownames(group4)
+group4$word <- rownames(group4)
+group5 <- pca_clustered_var %>% filter(cluster == 5)
+group5_string <- rownames(group5)
+group5$word <- rownames(group5)
+```
+
+This can then be mapped.
+Merging with original matrix only if based on ind/locations for mapping.
+
+```{r cluster_map_1}
+dendro_base <- as.data.frame(pca_spatial$ind$coord)
+ddist <- dist(dendro_base, method = "euclidean", p = 2)
+cluster_base <- hclust(ddist, method = "ward.D2")
+clusters <- cutree(cluster_base, k = 10)
+# combine with original matrix
+pca_clustered <- matrix_ger %>% mutate(cluster = clusters)
+pca_clustered_sf <- st_as_sf(pca_clustered, coords = c("lon", "lat"), crs = 4326)
+pca_clustered_sf$cluster <- as.factor(pca_clustered_sf$cluster)
+```
+
+```{r cluster_map_2}
+ggplot() +
+  geom_sf(data = ger_plot, aes(geometry = geometry), color="black", fill="white", size = 0.5) +
+  geom_sf(data = pca_clustered_sf, aes(fill=cluster), shape = 21, size = 5, stroke = 0, lwd = 0) +
+  geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, family = "Optima") +
+  geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4) +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set3") +
+  ggtitle("Clusters") +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank(),
+        plot.title = element_text(size = 10, hjust = 0.5, vjust = -7)) +
+  theme(legend.position = "none") 
+```
+
+I can also create a word cloud, however since each word is in there once, it is not super informative. I can add a size element through the dimensions though. 
+
+```{r word_cloud}
+ggplot(group1, aes(label = word, size = Dim.1)) +
+  geom_text_wordcloud() +
+  theme_minimal()
+```

@@ -1,0 +1,240 @@
+---
+title: "Map Aggregation"
+author: "Dana Roemling"
+date: '2023-06-19'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Map Aggregation
+
+In this markdown I summarise the code that is needed to produce aggregated maps. Aggregated means it is an averaged map over sentences or texts. It is based on kriged values, which are scaled to make them comparable. Then Moran's I is used for wighting of the individual features. Then the mean is used to produce the final map. 
+
+### Setup
+
+First, I get the libraries and the data.
+
+```{r setup}
+# libraries
+library(dplyr)
+library(spdep)
+library(sf)
+library(sp)
+library(tidyverse)
+library(gstat)
+library(stringr) 
+library(scales)
+library(classInt)
+library(viridis)
+library(viridisLite)
+library(rnaturalearth)
+library(sfheaders)
+
+# data
+longlat <- read.csv(file = './data_maps/gsa_geo_filtered.csv')
+longlat_only <- longlat %>% dplyr::select(lon, lat)
+corpus <- read.csv(file = './data_ling/full_matrix_for_filtering.csv') 
+token_at_location <- read.csv(file = './data_ling/tokens_at_location.csv')
+colnames(token_at_location) <- c("City", "Tokencount") 
+strings <- c("aber", "eigentlich", "isses")
+#colnames(strings) <- c("qword") 
+
+# set up mapping & kriging
+cities <- data.frame(
+  City = c("Köln", "München", "Wien", "Zürich", "Berlin", "Hamburg"),
+  Long = c(6.9578, 11.5755, 16.3731, 8.5417, 13.3833, 10),
+  Lat = c(50.9422, 48.1372, 48.2083, 47.3769, 52.5167, 53.55))
+crs2 <- CRS("+init=epsg:4326")
+cities_sf <- st_as_sf(cities, coords = c("Long", "Lat"), crs = crs2)
+
+EU <- st_read(dsn="./data_maps/EU/Try/", layer="NUTS_RG_20M_2021_3035")
+EU <- st_transform(EU, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+gsa_outline <- ne_countries(country = c("Austria", "Germany", "Switzerland"), returnclass="sf", scale = "large")
+gsa_plot <- gsa_outline %>% dplyr::select(geometry) # just the outlines of the three
+gsa_spatial <- as_Spatial(gsa_plot) # new object as spatial instead of sf
+sp_grid <- as.data.frame(spsample(gsa_spatial,
+                                  n = 100000,
+                                  type = "regular", # systematically aligned sampling
+                                  offset = c(0.5,0.5))) # makes sure grid is the same every time
+sp_grid_sf <- st_as_sf(sp_grid, coords=c("x1","x2"), crs = st_crs(4326))
+sp_grid_small <- as.data.frame(spsample(gsa_spatial,
+                                        n = 500,
+                                        type = "regular", # systematically aligned sampling
+                                        offset = c(0.5,0.5))) # makes sure grid is the same every time
+sp_grid_sf_small <- st_as_sf(sp_grid_small, coords=c("x1","x2"), crs = st_crs(4326))
+```
+
+### Prepare Loop
+
+```{r loop prep}
+# establish data objects
+morans_calc <- c()
+kriged_data <- sf_to_df(sp_grid_sf, fill = TRUE)
+kriged_data <- dplyr::select(kriged_data, "x", "y")
+colnames(kriged_data) <- c("lon", "lat") 
+```
+
+### Loop 
+
+In this loop I first extract the respective word and its values from the corpus, calculate the Moran's I value for it, then krige it (double) and then append all the values to two data objects. 
+
+```{r loop}
+# do strings$ if more columns
+  for (qword in strings) {
+    try(
+      { wd <- getwd()
+      print(paste0("Working Directory: ", wd))
+      
+      # extract word
+      one_word <- corpus %>% filter(word == qword)
+      colnames(one_word) <- c("Token", "City", "Frequency")
+      merger_one <- merge(one_word, longlat, by.x ="City", by.y = "City")
+      colnames(merger_one) <- c("City", "Token", "Frequency", "lon", "lat")
+      merger <- merge(merger_one, token_at_location, by.x ="City", by.y = "City")
+      merger$relfreq <- (merger$Frequency/merger$Tokencount)
+      merger$relfreq1000 <- (merger$relfreq*1000)
+      colnames(merger) <- c("City", "Token", "Frequency", "lon", "lat", "TokenCount", "RelativeFrequency", "RelativeFrequencyThousand")
+      quant <- summary(merger$TokenCount)[2]
+      merger <- merger %>% filter(TokenCount > quant)
+      merger_small <- merger %>% dplyr::select("City", "lon", "lat", "RelativeFrequency")
+      merger_small <- merger_small[order(merger_small$lon,decreasing=TRUE),]
+      print(paste0("Merger Done: ", qword))
+      
+      
+      # calculate moran's I
+      merger_single <- aggregate(merger_small$RelativeFrequency, by=list(lon=merger_small$lon, lat=merger_small$lat), FUN=mean)
+      merger_single <- merger_single[order(merger_single$lon,decreasing=TRUE),]
+      colnames(merger_single) <- c("lon", "lat", "RelativeFrequency")
+      amount <- nrow(merger_single)
+      percent_knn <- round((amount/100), 0)
+      longlat_variable <- merger_single %>% dplyr::select(lon, lat)
+      knn <- knn2nb(knearneigh(coordinates(longlat_variable), k = percent_knn, longlat = TRUE))
+      knn <- include.self(knn)
+      weighted_knn <- nb2listw(knn, style="W", zero.policy=TRUE)
+      moran <- moran(merger_single$RelativeFrequency, weighted_knn, length(knn), Szero(weighted_knn))[1]
+      output <- c(qword, moran)
+      morans_calc = rbind(morans_calc, output)
+      print(paste0("Morans Done: ", qword))
+      
+      # Variogram
+      trial <- merger %>% dplyr::select("lon", "lat", "RelativeFrequencyThousand")
+      data <- trial[3]
+      coords <- trial[1:2]
+      crs <- CRS("+init=epsg:4326") 
+      spdf <- SpatialPointsDataFrame(coords      = coords,
+                                     data        = data, 
+                                     proj4string = crs)
+      spdf = spdf[which(!duplicated(spdf@coords)), ]
+      vg <- variogram(RelativeFrequencyThousand~1, data = spdf, width = 1, cutoff = 300)
+      vg_fit <- fit.variogram(vg, vgm("Exp")) 
+      print(paste0("Variogram Done: ", qword))
+      
+      # Kriging
+      krig2 <- krige(RelativeFrequencyThousand~1, 
+                     locations = spdf, 
+                     newdata = sp_grid_sf_small, 
+                     model = vg_fit)
+      
+      krig3 <- krige(var1.pred~1, 
+                     locations = krig2, 
+                     newdata = sp_grid_sf, 
+                     model = vg_fit)
+      print(paste0("Kriging Done: ", qword))
+      
+      # Scaling the kriged variables 
+      krig3$scaledpred <- scale(krig3$var1.pred)
+      krig3 <- plyr::rename(krig3, c("scaledpred" = qword))
+      print(paste0("Scaling Done: ", qword))
+      
+      # add to kriged_data object
+      krig3_notsf <- sf_to_df(krig3, fill = TRUE)
+      krig3_notsf <- dplyr::select(krig3_notsf, qword, "x", "y")
+      colnames(krig3_notsf) <- c(qword, "lon", "lat") 
+      kriged_data <- merge(x = kriged_data, y = krig3_notsf, by.x = c("lon", "lat"), by.y = c("lon", "lat"), all.x=TRUE)
+     
+        }
+    )
+  }
+
+```
+
+### Combine Moran's I and kriged data
+
+First extract some values to set up the for loop. Then multiply each kriged column with its respective Moran's I value. Then calculate the mean of all those values.
+
+```{r moran * krig}
+# export morans i
+morans_calc <- as.data.frame(morans_calc)
+colnames(morans_calc) <- c("word", "score") 
+rownames(morans_calc) <- 1:nrow(morans_calc)
+
+# get which words are in kriged_data and exclude long/lat
+word_columns <- names(kriged_data)[sapply(kriged_data, is.numeric)]
+word_columns <- setdiff(word_columns, c("lon", "lat"))
+
+# multiply kriged_data with moran's values
+for (word in word_columns) {
+  if (word %in% morans_calc$word) {
+    word_score <- as.numeric(morans_calc$score[morans_calc$word == word])
+    print(paste0("Word: ", word))
+    print(paste0("Score: ", word_score))
+    print(paste0("Index: ", match(word, morans_calc$word)))
+    kriged_data[, paste0(word, "_multiplied")] <- as.numeric(kriged_data[, word]) * word_score
+  }
+}
+
+# mean over kriged values multiplied with moran's i
+multiplied_columns <- paste0(word_columns, "_multiplied")
+calculation <- kriged_data %>%
+  dplyr::select(lon, lat, all_of(multiplied_columns)) %>%
+  dplyr::rowwise() %>%
+  dplyr::mutate(mean_val = mean(c_across(multiplied_columns), na.rm = TRUE),
+                median_val = median(c_across(multiplied_columns), na.rm = TRUE),
+                sd_val = sd(c_across(multiplied_columns), na.rm = TRUE)) %>%
+  dplyr::ungroup()
+calculation_sf <- st_as_sf(calculation, coords = c("lon", "lat"), crs = crs2)
+```
+
+### Aggregated Map
+
+The last step is to create a map based on the combined / averaged value. 
+
+```{r map}
+# outside loop I create the final map
+legend_max <- round(max(calculation$mean_val), digits = 2)
+legend_min <- round(min(calculation$mean_val), digits = 2)
+
+
+# make that one map
+tiff(paste0("Map_aggregated.tiff"), units="in", width=3.8, height=5, res=300)
+print(
+ggplot() +
+  geom_sf(data = calculation_sf, aes(fill=mean_val), shape = 21, size = 0.75, stroke = 0, lwd = 0) +
+  geom_sf(data = gsa_plot, aes(geometry = geometry), color="black", fill=NA, size = 0.5) +
+  geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, family = "Optima") +
+  geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4) +
+  theme_minimal() +
+  scale_fill_steps(low="#ffffff", high="#310d59", n.breaks = 20, labels = NULL) +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank()) +
+  theme(legend.position = c(0.90, 0.65), 
+        legend.title = element_text(size = 6, family = "Optima"), 
+        legend.text = element_text(size = 6, family = "Optima", hjust = 1),
+        legend.title.align = 0,
+        legend.key.size = unit(0.3, "cm"),
+        legend.key.width = unit(0.4,"cm")) +
+  annotate(geom="text", x = 16.6, y = 52.4, label=legend_max, size = 1.5, family = "Optima") +
+  annotate(geom="text", x = 16.6, y = 51.3, label=legend_min, size = 1.5, family = "Optima") +
+  annotate(geom="text", x = 16.2, y = 49.8, label="danaroemling.com", size = 2.5, family = "Optima") +
+  annotate(geom="text", x = 16.2, y = 49.6, label="03/04/2023", size = 2.5, family = "Optima") +
+  labs(fill = " ")
+)
+dev.off()
+print(paste0("Tiff Done."))
+```

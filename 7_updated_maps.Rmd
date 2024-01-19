@@ -1,0 +1,134 @@
+---
+title: "Updated Maps"
+author: "Dana Roemling"
+date: '2023-03-14'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Libraries
+
+```{r libs}
+library(stringr) 
+library(dplyr) 
+library(tidyverse) 
+library(rnaturalearth)  
+```
+
+## New GSA outline
+
+There is a new and easier way to create the GSA outline, which is based on the ne_countries() function. 
+
+```{r outline}
+gsa_outline <- ne_countries(country = c("Austria", "Germany", "Switzerland"), returnclass="sf", scale = "large")
+```
+
+## Preparation
+
+This chunk needs to run for the altered mapping to work (just the usual prep.).
+
+```{r prep}
+# data standard
+corpus <- read.csv(file = './data_ling/full_matrix_for_filtering.csv') 
+token_at_location <- read.csv(file = './data_ling/tokens_at_location.csv')
+colnames(token_at_location) <- c("City", "Tokencount") 
+longlat <- read.csv(file = './data_maps/gsa_geo_filtered.csv')
+longlat_small <- read.csv(file = './data_maps/gsa_geo_filtered_nosmall22.csv')
+longlat_small <- read.csv(file = './data_maps/gsa_geo_filtered_nosmall85.csv')
+
+# get word of interest
+one_word <- corpus %>% filter(word == "mistkübel")
+colnames(one_word) <- c("Token", "City", "Frequency")
+
+# merge word with geo data
+merger_one <- merge(one_word, longlat, by.x ="City", by.y = "City")
+colnames(merger_one) <- c("City", "Token", "Frequency", "lon", "lat")
+
+# add relative frequency
+merger <- merge(merger_one, token_at_location, by.x ="City", by.y = "City")
+merger$relfreq <- (merger$Frequency/merger$Tokencount)
+merger$relfreq1000 <- (merger$relfreq*1000)
+colnames(merger) <- c("City", "Token", "Frequency", "lon", "lat", "TokenCount", "RelativeFrequency", "RelativeFrequencyThousand")
+
+```
+
+## Plotting
+
+Instead of using geom_polygon() I now need to use geom_sf() to create the map. But the rest of the mapping, like the point layer, remains the same.
+
+```{r plot}
+ggplot(data = gsa_outline,
+       colour = "black", 
+       size = 0.1, 
+       fill = "gray95") + 
+  geom_sf() + 
+  theme_minimal() +  
+  geom_point(data = merger, 
+             aes(x = lon, y = lat, size = RelativeFrequencyThousand),
+             colour = "darkorchid4",
+             alpha = 0.7)  +
+  #geom_text(data = merger, aes(x = lng, y = lat, label=city), hjust=0.1, vjust=0.1, size = 2) +
+  guides(color = "none") +
+  labs(size="Relative\nFrequency") +
+  ggtitle("'möchten' in the GSA") +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank(),
+        plot.title = element_text(hjust = 0.5))
+```
+
+# Plotting Comparison
+
+I can also do the alternation plots with the new GSA outline. A quick prep to get the values first.
+
+```{r prep 2}
+one_word <- corpus %>% filter(word == "mülleimer")
+colnames(one_word) <- c("Token", "City", "Frequency")
+second_word <- corpus %>% filter(word == "mistkübel")
+colnames(second_word) <- c("Token", "City", "Frequency")
+
+# combine into one and calculate proportion
+merged <- merge(one_word, second_word, by ="City", all=T)
+# the next two lines make sure that ALL instances get plotted.
+merged$Frequency.x[is.na(merged$Frequency.x)] <- 0
+merged$Frequency.y[is.na(merged$Frequency.y)] <- 0
+merged$Proportion <- 100* (merged$Frequency.x / (merged$Frequency.x + merged$Frequency.y))
+
+# merge with geo data
+merger <- merge(merged, longlat, by.x ="City", by.y = "City")
+```
+
+
+```{r plot 2}
+newtitle <- expression(paste(italic("matura "), "& ", italic("abitur "), "in the GSA"))
+
+ggplot(data = gsa_outline,
+       colour = "black", 
+       size = 0.1, 
+       fill = "gray95") + 
+  geom_sf() + 
+  theme_minimal() +  
+  geom_point(data = merger, 
+             aes(x = lon, y = lat, col = Proportion, size = (Frequency.x+Frequency.y)), 
+             alpha = 0.9)  +
+  #comment out line below to lose city labels
+  #geom_text(data = merger, aes(x = lng, y = lat, label=city), hjust=0.1, vjust=0.1, size = 2) +
+  #scale_color_viridis(option = "magma") +
+  guides(size = "none") +
+  scale_color_gradient(low = "seagreen3", high = "mediumpurple3") +
+  labs(size="Proportion") +
+  ggtitle(newtitle) +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank(),
+        legend.text = element_text(size = 6),
+        legend.title = element_text(size = 9),
+        plot.title = element_text(hjust = 0.4, size = 13, vjust = -2))
+```
