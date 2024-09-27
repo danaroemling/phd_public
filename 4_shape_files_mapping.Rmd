@@ -3,6 +3,8 @@ title: "Shape Files Mapping"
 author: "Dana"
 date: '2022-10-24'
 output: html_document
+toc: true
+toc_float: true
 ---
 
 ```{r setup, include=FALSE}
@@ -15,141 +17,301 @@ This RMD is about using the shape files for the German-speaking area and filling
 I start by loading the libraries. 
 
 ```{r libs}
+# Load the 'sf' package for handling spatial data using simple features
 library(sf)
+
+# Load the 'tidyverse', a collection of R packages for data manipulation and visualization, 
+# including ggplot2, dplyr, and others
 library(tidyverse)
+
+# Load the 'sp' package for spatial data classes and methods, providing support for handling 
+# spatial data in R
 library(sp)
+
+# Load the 'rworldmap' package for visualizing world maps and spatial data on them
 library(rworldmap)
+
+# Load the 'ggplot2' package for creating static graphics and visualizations based on the 
+# Grammar of Graphics
+library(ggplot2)
+
+# Load the 'dplyr' package for data manipulation and transformation, offering functions for 
+# filtering, selecting, and summarizing data
 library(dplyr)
+
+# Load the 'RColorBrewer' package for color palettes, useful for visualizations to improve 
+# aesthetics and clarity
 library(RColorBrewer)
+
+# Load the 'scales' package for functions to scale and format axes and legends in plots,
+# enhancing the visual representation of data
+library(scales)
 ```
 
 Then I load in the shape files. To know which shape files work is a bit of trial and error. I have used shape files that correspond to postal codes for Switzerland and Germany, whereas in Austria the basis for merging is Gemeindekennziffern, which roughly translates to administrative district number. 
 
 ```{r load shapes}
-germany <- st_read(dsn="/rds/projects/g/grievej-german-dialect-profiling/shape/Germany/plz-3stellig/", layer="plz-3stellig")
-austria <- st_read(dsn="/rds/projects/g/grievej-german-dialect-profiling/shape/Austria/Gemeinden/", layer="Gemeinden_250")
-switzerland <- st_read(dsn="/rds/projects/g/grievej-german-dialect-profiling/shape/Switzerland/PC/", layer="PLZO_PLZ")
-EU <- st_read(dsn="/rds/projects/g/grievej-german-dialect-profiling/shape/EU/Try/", layer="NUTS_RG_20M_2021_3035")
+# Read in the shapefile for Germany's postal codes (3-digit level) from the specified directory.
+germany <- st_read(dsn = "/rds/projects/g/grievej-german-dialect-profiling/shape/Germany/plz-3stellig/",
+                   layer = "plz-3stellig")
+
+# Read in the shapefile for Austria's municipalities from the specified directory.
+austria <- st_read(dsn = "/rds/projects/g/grievej-german-dialect-profiling/shape/Austria/Gemeinden/",
+                   layer = "Gemeinden_250")
+
+# Read in the shapefile for Switzerland's postal codes from the specified directory.
+switzerland <- st_read(dsn = "/rds/projects/g/grievej-german-dialect-profiling/shape/Switzerland/PC/",
+                       layer = "PLZO_PLZ")
+
+# Read in the shapefile for the European Union's NUTS regions (Nomenclature of Territorial Units for Statistics) 
+# from the specified directory.
+EU <- st_read(dsn = "/rds/projects/g/grievej-german-dialect-profiling/shape/EU/Try/", 
+              layer = "NUTS_RG_20M_2021_3035")
+
+# Optional plot commands to visualise the shapefiles for Germany, Austria, and Switzerland.
 #plot(germany)
 #plot(austria)
 #plot(switzerland)
+
+# Read in the shapefile for Germany's postal codes (3-digit level) from a local directory.
+germany <- st_read(dsn = "data_maps/Germany/plz-3stellig/", 
+                   layer = "plz-3stellig")
+
+# Read in the shapefile for Austria's municipalities from a local directory.
+austria <- st_read(dsn = "data_maps/Austria/Gemeinden/", 
+                   layer = "Gemeinden_250")
+
+# Read in the shapefile for Switzerland's postal codes from a local directory.
+switzerland <- st_read(dsn = "data_maps/Switzerland/PC/", 
+                       layer = "PLZO_PLZ")
+
+# Read in the shapefile for the European Union's NUTS regions from a local directory.
+EU <- st_read(dsn = "data_maps/EU/Try/", 
+              layer = "NUTS_RG_20M_2021_3035")
 ```
 
 I change the projection to the same one for all of the shape files. This ensures that they can all be mapped together, as different projections would project the shapes differently. WGS84 is one of the standard projections, which refers to "a datum featuring coordinates that change with time. WGS84 is defined and maintained by the United States National Geospatial-Intelligence Agency (NGA)."
 
 ```{r projection}
-germany <- st_transform(germany, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
-austria <- st_transform(austria, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
-switzerland <- st_transform(switzerland, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
-EU <- st_transform(EU, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+# Transform the coordinate reference system (CRS) of the Germany shapefile to WGS84 (longitude/latitude).
+germany <- st_transform(germany, 
+                        CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+
+# Transform the coordinate reference system (CRS) of the Austria shapefile to WGS84 (longitude/latitude).
+austria <- st_transform(austria, 
+                        CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+
+# Transform the coordinate reference system (CRS) of the Switzerland shapefile to WGS84 (longitude/latitude).
+switzerland <- st_transform(switzerland, 
+                            CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+
+# Transform the coordinate reference system (CRS) of the European Union shapefile to WGS84 (longitude/latitude).
+EU <- st_transform(EU, 
+                   CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
 ```
 
 I then get the outlines I want to plot around the filled shapes. I do this by selecting the relevant country names / abbreviations and filtering the EU shape files for these countries. 
 
 ```{r gsa outline}
+# Define a vector containing the country codes for Germany (DE), Austria (AT), and Switzerland (CH)
 gsa_string <- c("DE", "AT", "CH")
+
+# Filter the EU dataset to include only rows where the country code (CNTR_CODE) matches one of the codes in gsa_string
 gsa <- filter(EU, CNTR_CODE %in% gsa_string)
+
+# Further filter the gsa dataset to retain only the highest level geographic units (level code 0), typically representing countries or main regions
 gsa_outline <- filter(gsa, LEVL_CODE == 0)
-#plot(gsa_outline)
+
+# Optionally, plot the filtered geographic data (commented out)
+# plot(gsa_outline)
 ```
 
 Now I load in the name & post code match files. 
 
 ```{r load post code}
-ger_cities <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/shape/germany.csv', colClasses='character')
-aus_cities <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/shape/austria.csv', colClasses='character')
-s_cities <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/shape/switzerland.csv', colClasses='character')
+# Read city data for Germany, specifying that all columns should be treated as character strings
+ger_cities <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/shape/germany.csv',
+                       colClasses = 'character')
+
+# Read city data for Austria, specifying that all columns should be treated as character strings
+aus_cities <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/shape/austria.csv',
+                       colClasses = 'character')
+
+# Read city data for Switzerland, specifying that all columns should be treated as character strings
+s_cities <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/shape/switzerland.csv',
+                     colClasses = 'character')
+
+# Repeat the process to read city data from a different directory (data_maps)
+ger_cities <- read.csv(file = 'data_maps/germany.csv', 
+                       colClasses = 'character')
+aus_cities <- read.csv(file = 'data_maps/austria.csv', 
+                       colClasses = 'character')
+s_cities <- read.csv(file = 'data_maps/switzerland.csv', 
+                     colClasses = 'character')
 ```
 
 Now I can merge the shape files with the city name information. 
 
 ```{r merge}
-merger_ger <- as.data.frame(merge(ger_cities, germany, by.x ="PLZ3_Ger", by.y = "plz", all.x = TRUE))
-merger_aus <- merge(aus_cities, austria, by.x ="Gemeinde_Aus", by.y = "GKZ", all.x = TRUE)
-merger_s <- merge(s_cities, switzerland, by.x ="PLZ4_Swi", by.y = "PLZ", all.x = TRUE)
+# Merge the German cities data with the geographic data for Germany
+# 'PLZ3_Ger' from 'ger_cities' is matched with 'plz' from 'germany'
+# 'all.x = TRUE' ensures that all rows from 'ger_cities' are kept, even if there is no match in 'germany'
+merger_ger <- as.data.frame(merge(ger_cities, germany, 
+                                  by.x = "PLZ3_Ger", by.y = "plz", all.x = TRUE))
 
+# Merge the Austrian cities data with the geographic data for Austria
+# 'Gemeinde_Aus' from 'aus_cities' is matched with 'GKZ' from 'austria'
+# 'all.x = TRUE' ensures that all rows from 'aus_cities' are retained, even if there is no corresponding entry in 'austria'
+merger_aus <- merge(aus_cities, austria, 
+                    by.x = "Gemeinde_Aus", by.y = "GKZ", all.x = TRUE)
+
+# Merge the Swiss cities data with the geographic data for Switzerland
+# 'PLZ4_Swi' from 's_cities' is matched with 'PLZ' from 'switzerland'
+# 'all.x = TRUE' ensures that all rows from 's_cities' are kept, even if there is no match in 'switzerland'
+merger_s <- merge(s_cities, switzerland, 
+                  by.x = "PLZ4_Swi", by.y = "PLZ", all.x = TRUE)
 ```
 
 With this, I can make simple plots. I could have made a plot without having the names in the shape files and just use the shape files, but then I couldn't combine it with the Jodel data.
 
 ```{r simple plots}
-#Austria plots quickly, just the areas where there is data
+# Austria plots quickly, just the areas where there is data
+# Create a simple spatial plot for the merged Austrian cities data
 ggplot(data = merger_aus, aes(geometry = geometry)) +
-  geom_sf()
+  geom_sf()  # Use geom_sf() to draw the geometries from the merger_aus data frame
 
-#Switzerland plots quickly too, just the areas where there is data
+# Switzerland plots quickly too, just the areas where there is data
+# Create a simple spatial plot for the merged Swiss cities data
 ggplot(data = merger_s, aes(geometry = geometry)) +
-  geom_sf()
+  geom_sf()  # Again, use geom_sf() to visualize the Swiss city geometries
 
-#Germany takes quite long
+# Germany takes quite long
+# Create a simple spatial plot for the merged German cities data
+# It may take longer due to the complexity or size of the data
 ggplot(data = merger_ger, aes(geometry = geometry)) +
-  geom_sf()
+  geom_sf()  # Use geom_sf() to visualize the geometries from the merger_ger data frame
 
-#first combined plot
+# First combined plot
+# Create a composite plot that includes outlines for all three countries
 ggplot() +
-  geom_sf(data = gsa_outline, aes(geometry = geometry), colour="black", fill=NA) + 
+  geom_sf(data = gsa_outline, aes(geometry = geometry), 
+          colour = "black", fill = NA) + 
+  # Add the geometry for Germany
   geom_sf(data = merger_ger, aes(geometry = geometry)) +
+  # Add the geometry for Austria
   geom_sf(data = merger_aus, aes(geometry = geometry)) +
+  # Add the geometry for Switzerland
   geom_sf(data = merger_s, aes(geometry = geometry)) 
+
 ```
 
 Then I make the map more minimal.
 
 ```{r minimal}
-#more minimal combined plot
+# More minimal combined plot
+# Start a new ggplot object
 ggplot() +
-  geom_sf(data = gsa_outline, aes(geometry = geometry), colour="black", fill=NA) +
+  # Add the outline of the combined spatial areas for the three countries (Germany, Austria, Switzerland)
+  geom_sf(data = gsa_outline, aes(geometry = geometry), 
+          colour = "black", fill = NA) +
+  # Apply a minimal theme to the plot for a cleaner look
   theme_minimal() +
-  theme(axis.title.x = element_blank(), 
-        axis.title.y = element_blank(),
-        axis.text.x = element_blank(),
-        axis.text.y = element_blank(),
-        panel.grid.major = element_blank(),
-        plot.title = element_text(hjust = 0.5)) +
-  geom_sf(data = merger_ger, aes(geometry = geometry), colour="black", fill=NA) +
-  geom_sf(data = merger_aus, aes(geometry = geometry), colour="black", fill=NA) +
-  geom_sf(data = merger_s, aes(geometry = geometry), colour="black", fill=NA)
+  # Customize theme elements to remove axis titles and texts
+  theme(axis.title.x = element_blank(),  # Remove the x-axis title
+        axis.title.y = element_blank(),  # Remove the y-axis title
+        axis.text.x = element_blank(),    # Remove x-axis text (labels)
+        axis.text.y = element_blank(),    # Remove y-axis text (labels)
+        panel.grid.major = element_blank(), # Remove major grid lines from the panel
+        plot.title = element_text(hjust = 0.5)) + # Center the plot title
+  # Add the geometries for Germany to the plot
+  geom_sf(data = merger_ger, aes(geometry = geometry), 
+          colour = "black", fill = NA) +
+  # Add the geometries for Austria to the plot
+  geom_sf(data = merger_aus, aes(geometry = geometry), 
+          colour = "black", fill = NA) +
+  # Add the geometries for Switzerland to the plot
+  geom_sf(data = merger_s, aes(geometry = geometry), 
+          colour = "black", fill = NA) 
 ```
 
 To plot something I counted, I get the counts from the matrix data. 
 
 ```{r count function}
-#get word of interest and merge with geo data
+# Get word of interest and merge with geo data
+# Read in a CSV file containing a full matrix for filtering. This file presumably contains various linguistic data.
 corpus <- read.csv(file = './data_ling/full_matrix_for_filtering.csv') 
-one_word <- corpus %>% filter(word == "ich")
+
+# Filter the corpus to select rows where the word is "word". 
+# This creates a new data frame 'one_word' that only contains occurrences of this specific word.
+one_word <- corpus %>% filter(word == "hund")
+
+# Rename the columns of the filtered data frame for clarity.
+# The first column is renamed to 'Token', the second to 'City', and the third to 'Frequency'.
 colnames(one_word) <- c("Token", "City", "Frequency")
 ```
 
 And now merging the counts and the shape files that already contained the city names.
 
 ```{r merge count}
-plot_ger <- merge(merger_ger, one_word, by ="City", all.x = TRUE)
-plot_aus <- merge(merger_aus, one_word, by ="City", all.x = TRUE)
-plot_swiz <- merge(merger_s, one_word, by ="City", all.x = TRUE)
+# Merge geographical data with the filtered word data for Germany
+plot_ger <- merge(merger_ger, one_word, by = "City", all.x = TRUE)
+
+# Merge geographical data with the filtered word data for Austria
+plot_aus <- merge(merger_aus, one_word, by = "City", all.x = TRUE)
+
+# Merge geographical data with the filtered word data for Switzerland
+plot_swiz <- merge(merger_s, one_word, by = "City", all.x = TRUE)
 ```
 
 Finally, I can produce the map.
 
 ```{r final plot}
-#dev.off()
+# Close the current graphics device if it is open (commented out)
+# dev.off() 
+
+# Start creating a ggplot object
 ggplot() +
-  geom_sf(data = gsa_outline, aes(geometry = geometry), colour="black", fill=NA, size = 0.1) +
-  theme_minimal() +
-  theme(axis.title.x = element_blank(), 
-        axis.title.y = element_blank(),
-        axis.text.x = element_blank(),
-        axis.text.y = element_blank(),
-        panel.grid.major = element_blank(),
-        plot.title = element_text(hjust = 0.5)) +
-  geom_sf(data = plot_aus[!is.na(plot_aus$Frequency),], 
-          aes(geometry = geometry, fill=Frequency), size = 0.05) + 
+  
+  # Add the geographical outline for the combined area (Germany, Austria, Switzerland)
+  geom_sf(data = gsa_outline, aes(geometry = geometry), 
+          colour = "black",  # Set outline color to black
+          fill = NA,        # No fill for the outline (transparent)
+          size = 0.1)       # Thickness of the outline
+  
+  # Apply a minimal theme to the plot
+  + theme_minimal() + 
+  
+  # Customize theme elements for better clarity and aesthetics
+  theme(axis.title.x = element_blank(),       # Remove x-axis title
+        axis.title.y = element_blank(),       # Remove y-axis title
+        axis.text.x = element_blank(),        # Remove x-axis text labels
+        axis.text.y = element_blank(),        # Remove y-axis text labels
+        panel.grid.major = element_blank(),    # Remove major grid lines
+        plot.title = element_text(hjust = 0.5)) # Center the plot title
+  
+  # Add geographical data for Austria
+  # Filter the plot_ger data frame to retain only rows where Frequency is not NA,
+  # creating a new data frame that contains valid frequency data for further analysis or visualization.
+  + geom_sf(data = plot_aus[!is.na(plot_aus$Frequency),], 
+            aes(geometry = geometry, fill = Frequency), # Map geometry and fill by Frequency
+            size = 0.05) +  # Set the size (thickness) of the filled areas
+  
+  # Add geographical data for Switzerland
   geom_sf(data = plot_swiz[!is.na(plot_swiz$Frequency),], 
-          aes(geometry = geometry, fill=Frequency), size = 0.05) +
+          aes(geometry = geometry, fill = Frequency), # Map geometry and fill by Frequency
+          size = 0.05) +  # Set the size (thickness) of the filled areas
+  
+  # Add geographical data for Germany
   geom_sf(data = plot_ger[!is.na(plot_ger$Frequency),], 
-          aes(geometry = geometry, fill=Frequency), size = 0.05) +
-  scale_fill_gradient2(midpoint = 0) +
-  ggtitle("Frequency of 'Matura' in the GSA") +
-  labs(fill='Matura') 
+          aes(geometry = geometry, fill = Frequency), # Map geometry and fill by Frequency
+          size = 0.05) +  # Set the size (thickness) of the filled areas
+  
+  # Define the color scale for the fill based on frequency
+  # Use "Reds" color palette and reverse the gradient
+  scale_fill_distiller(palette = "Reds", trans = "reverse") + 
+  
+  # Remove the legend from the plot
+  theme(legend.position = "none") 
 ```
 
 

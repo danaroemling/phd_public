@@ -3,6 +3,8 @@ title: "First Maps"
 author: "Dana"
 date: "29/03/2022"
 output: html_document
+toc: true
+toc_float: true
 ---
 
 ```{r setup, include=FALSE}
@@ -14,11 +16,27 @@ knitr::opts_chunk$set(echo = TRUE)
 In this markdown I will summarise everything that is needed to create the GSA map, to plot data points onto it and to count instances of words per location in the corpus. I start by loading all necessary libraries and reading in the csv file for the corpus.
 
 ```{r prep}
-library(stringr) # regex count function
-library(dplyr) # regex function
-library(tidyverse) # mapping
-library(sp) # mapping, loads with rworldmap
-library(rworldmap) # mapping
+# Load the necessary libraries for data manipulation and mapping
+
+# 'stringr' is used for string operations, including regex functions for pattern matching and counting
+library(stringr) 
+
+# 'dplyr' provides functions for data manipulation and is commonly used for data wrangling tasks
+library(dplyr) 
+
+# 'tidyverse' is a collection of packages for data science that includes ggplot2, dplyr, tidyr, and others
+# It is commonly used for data manipulation, visualization, and transformation tasks
+library(tidyverse) 
+
+# 'sp' is used for spatial data analysis and provides classes and methods for handling spatial objects
+# It also supports mapping functionalities
+library(sp) 
+
+# 'rworldmap' is a package that provides functions for visualizing data on world maps, making it easy to create maps with spatial data
+library(rworldmap) 
+
+# Read in a CSV file containing training data, likely related to linguistic data, and store it in a data frame named 'corpus'
+# The file path indicates that this file is located in the "data_ling" directory
 corpus <- read.csv(file = "./data_ling/train_70.csv")
 ```
 
@@ -26,67 +44,82 @@ corpus <- read.csv(file = "./data_ling/train_70.csv")
 
 The next step is creating the function that counts instances of words per city. There are two versions of this function, counting two variants or just a simple count of a single feature. This is the variant counting:
 
-```{r count double}
-#takes two words and produces proportion. first input is the the standard.
-regcount <- function(corp, word1, word2, case = FALSE, neg = FALSE){
+```{r count_double}
+# This function takes two words and produces the proportion of occurrences of the second word relative to the first.
+# The first input is treated as the standard against which the second is measured.
+regcount <- function(corp, word1, word2, case = FALSE, neg = FALSE) {
   
-  # Set case/regex
-  word1 <- paste('\\b', word1, '\\b', sep ="") 
-  word1 <- regex(word1, ignore_case = !case)
+  # Prepare the first word for regex matching:
+  # The '\\b' ensures that we match the whole word only (word boundaries).
+  word1 <- paste('\\b', word1, '\\b', sep = "") 
+  word1 <- regex(word1, ignore_case = !case) # Create a regex pattern for word1, considering case sensitivity based on the 'case' parameter.
   
-  word2 <- paste('\\b', word2, '\\b', sep ="") 
-  word2 <- regex(word2, ignore_case = !case)
+  # Prepare the second word similarly.
+  word2 <- paste('\\b', word2, '\\b', sep = "") 
+  word2 <- regex(word2, ignore_case = !case) # Create a regex pattern for word2.
+
+  # Extract indexes of occurrences for word1 and word2 in the text corpus:
+  # 'str_which' identifies the positions in 'corp' where the pattern matches.
+  hits1 <- str_which(string = corp, pat = word1, negate = neg)   
+  hits2 <- str_which(string = corp, pat = word2, negate = neg)   
+
+  # Extract the cities associated with the occurrences of word1 and word2:
+  cities1 <- corpus$location[hits1] 
+  cities2 <- corpus$location[hits2] 
   
-  # Extract indexes with at least one hit
-  hits1 <- str_which(string = corp,  pat = word1,  negate = neg)   
-  hits2 <- str_which(string = corp,  pat = word2,  negate = neg)   
+  # Create frequency tables for each city:
+  c1 <- as.data.frame(table(cities1)) # Frequency table for occurrences of word1.
+  c2 <- as.data.frame(table(cities2)) # Frequency table for occurrences of word2.
   
-  # Cities
-  cities1<- corpus$location[hits1] 
-  cities2<- corpus$location[hits2] 
-  
-  c1<-as.data.frame(table(cities1))
-  c2<-as.data.frame(table(cities2))
-  
-  dtable <- merge(c1, c2, by.x = 'cities1', by.y = 'cities2', all =TRUE )
-  
+  # Merge the frequency tables on city names:
+  dtable <- merge(c1, c2, by.x = 'cities1', by.y = 'cities2', all = TRUE)
+
+  # Replace any NA values in the merged table with 0:
   dtable[is.na(dtable)] <- 0
   
-  dtable$prop <- 100* (dtable$Freq.x / (dtable$Freq.x + dtable$Freq.y) )
+  # Calculate the proportion of occurrences of word1 relative to the total occurrences of both words:
+  # 'Freq.x' corresponds to word1 occurrences, 'Freq.y' to word2.
+  dtable$prop <- 100 * (dtable$Freq.x / (dtable$Freq.x + dtable$Freq.y))
   
-  # This will be the structures for output
-  output<-c()
+  # Prepare the output data structure.
+  output <- c()
   output <- dtable
   
-  # Output results  
+  # Return the results containing city names, frequencies, and proportions.
   return(output)
 }
 ```
 
 This is the single counting:
 
-```{r count single}
-regcount <- function(corp, word1, case = FALSE, neg = FALSE){
+```{r count_single}
+# This function counts occurrences of a specified word in a given corpus 
+# and groups the results by city.
+regcount <- function(corp, word1, case = FALSE, neg = FALSE) {
   
-  # Set case/regex
-  word1 <- paste('\\b', word1, '\\b', sep ="") 
-  word1 <- regex(word1, ignore_case = !case)
+  # Prepare the regex pattern for the specified word:
+  # The '\\b' ensures that the word matches exactly (whole word).
+  word1 <- paste('\\b', word1, '\\b', sep = "") 
+  word1 <- regex(word1, ignore_case = !case) # Create regex pattern for word1, ignoring case based on the 'case' parameter.
   
-  # Extract indexes with at least one hit
-  hits1 <- str_which(string = corp,  pat = word1,  negate = neg)   
+  # Extract indexes of occurrences of word1 in the text corpus:
+  # 'str_which' identifies the positions in 'corp' where the pattern matches.
+  hits1 <- str_which(string = corp, pat = word1, negate = neg)   
   
-  # Cities
-  cities1<- corpus$location[hits1] 
+  # Get the cities associated with the occurrences of word1:
+  cities1 <- corpus$location[hits1] 
   
-  c1<-as.data.frame(table(cities1))
+  # Create a frequency table that counts occurrences of word1 per city:
+  c1 <- as.data.frame(table(cities1))
   
+  # Replace any NA values in the frequency table with 0:
   c1[is.na(c1)] <- 0
   
-  # This will be the structures for output
+  # Prepare the output data structure.
   output <- c()
   output <- c1
   
-  # Output results  
+  # Return the results containing city names and frequencies of word1.
   return(output)
 }
 ```
@@ -95,15 +128,30 @@ regcount <- function(corp, word1, case = FALSE, neg = FALSE){
 
 The next chunk first counts two words in the corpus and assigns the counts to reg_output. Reg_output then gets column names so that it can be merged with the longitudes and latitudes of the cities in the next step. 
 
-```{r count execution double}
-reg_output <- regcount(corp = corpus$message, word1 = "nicht", word2 ="nöd", case = FALSE)
+```{r count_execution_double}
+# Call the regcount function to analyze occurrences of words in the corpus.
+# The 'corp' argument specifies the message column from the 'corpus', 
+# The 'case' parameter is set to FALSE to ignore case sensitivity during the matching process.
+reg_output <- regcount(corp = corpus$message, word1 = "zur schule", word2 = "in die schule", case = FALSE)
+
+# Rename the columns of the resulting data frame for clarity:
+# "City" will hold city names,
+# "count1" will represent the count of occurrences of word 1,
+# "count2" will represent the count of occurrences of word 2,
+# "Proportion" will represent the proportion of occurrences for analysis.
 colnames(reg_output) <- c("City", "count1", "count2", "Proportion")
 ```
 
 For a single count, this is the chunk:
 
-```{r count execution single}
+```{r count_execution_single}
+# Call the regcount function again, this time to count occurrences of a word.
+# Here, only 'word1' is specified. The function will analyze the same corpus's message column.
+# The 'case' parameter remains FALSE to ensure case insensitivity.
 reg_output <- regcount(corp = corpus$message, word1 = "der", case = FALSE)
+
+# Rename the columns of the resulting data frame for clarity:
+# "City" will hold city names, and "Frequency" will represent the count of occurrences of "der".
 colnames(reg_output) <- c("City", "Frequency")
 ```
 
@@ -113,8 +161,17 @@ colnames(reg_output) <- c("City", "Frequency")
 In this step the coordinates for all cities are loaded and can then be merged with the counts. 
 
 ```{r coordinates}
+# Read the CSV file containing geographical coordinates and city names.
+# The file 'gsa_geo_filtered.csv' contains the longitudes and latitudes of various cities,
+# which will be used for mapping or further geographical analysis.
 longlat <- read.csv(file = './data_maps/gsa_geo_filtered.csv')
-merger <- merge(reg_output, longlat, by.x ="City", by.y = "City")
+
+# Merge the 'reg_output' data frame, which contains city names and word counts, 
+# with the 'longlat' data frame, which contains geographical coordinates.
+# The merge is performed using the 'City' column from both data frames as the key.
+# The result is stored in the 'merger' data frame, which now includes both word counts 
+# and the corresponding geographical coordinates (latitude and longitude) for each city.
+merger <- merge(reg_output, longlat, by.x = "City", by.y = "City")
 ```
 
 
@@ -123,16 +180,43 @@ merger <- merge(reg_output, longlat, by.x ="City", by.y = "City")
 To create the outlines of the GSA based on coordinates, the following chunk gets a world map and then extracts the polygons for the GSA. Those coordinates then get stored in DACH_coord.
 
 ```{r worldmap}
+# Retrieve a world map from the rworldmap package, which includes geographic information for all countries.
 worldMap <- getMap()
+
+# Define a vector containing the names of the DACH countries (Germany, Austria, Switzerland).
 DACH <- c("Germany", "Austria", "Switzerland")
-DACH_map <- which(worldMap$NAME%in%DACH)
-DACH_coord <- lapply(DACH_map, function(i){
+
+# Find the indices of the DACH countries in the world map data frame.
+# The `which` function is used to get the indices of rows where the NAME column matches the DACH vector.
+DACH_map <- which(worldMap$NAME %in% DACH)
+
+# Create a list of data frames containing the coordinates of the polygons for each DACH country.
+DACH_coord <- lapply(DACH_map, function(i) {
+  # Extract the coordinates of the first polygon of the country.
   df <- data.frame(worldMap@polygons[[i]]@Polygons[[1]]@coords)
-  df$region =as.character(worldMap$NAME[i])
+  
+  # Add a new column to the data frame to specify the region (country name).
+  df$region = as.character(worldMap$NAME[i])
+  
+  # Rename the columns for clarity: "long" for longitude, "lat" for latitude, and "region" for country name.
   colnames(df) <- list("long", "lat", "region")
+  
+  # Return the data frame containing the coordinates and region.
   return(df)
 })
+
+# Combine all individual data frames into a single data frame using do.call with rbind.
 DACH_coord <- do.call("rbind", DACH_coord)
+
+# OR alternative method using the rnaturalearth package
+# Obtain the outlines of the DACH countries as a simple features (sf) object.
+gsa_outline <- ne_countries(country = c("Austria", "Germany", "Switzerland"), returnclass = "sf", scale = "large")
+
+# Select only the geometry column from the obtained outlines, which contains the spatial features of the countries.
+gsa_plot <- gsa_outline %>% dplyr::select(geometry) # just the outlines of the three countries
+
+# Convert the sf object to a Spatial object, which is another common format for spatial data in R.
+gsa_spatial <- as_Spatial(gsa_plot) # new object as spatial instead of sf
 ```
 
 
@@ -141,63 +225,269 @@ DACH_coord <- do.call("rbind", DACH_coord)
 The next step then is the mapping of the coordinates with their counts using ggplot2. First, I take the GSA coordinates and create a blank map. I define which range of coordinates gets shown (coord_map) and set the theme to minimal. I then tell ggplot to use the merger data and plot points on my blank map using coordinates. The colour of the points is based on the proportion of use of the first (or main) word in the count. City labels can be added. scale_color_gradient colours the gradient of the proportion (and the points). Different color filling is needed for categorical data. Labs sets the title of the legend. ggtitle sets the title of the whole plot. The last theme element gets rid of grid lines and marks on the axis, including axis title.
 This is the map for variant / proportion mapping.
 
-```{r mapping double}
-ggplot() + geom_polygon(data = DACH_coord, 
-                        aes(x = long, y = lat, group = region),
-                        colour = "black", 
-                        size = 0.1, 
-                        fill = "snow3") + 
-  coord_map(xlim = c(4.5, 17),  
-            ylim = c(45.5, 55)) + 
+```{r mapping_double}
+# Begin creating a ggplot object
+ggplot() + 
+
+  # Add polygons for the DACH countries using the DACH_coord data frame
+  geom_polygon(data = DACH_coord, 
+               aes(x = long, y = lat, group = region),  # Map longitudes and latitudes with group defined by region
+               colour = "black",       # Set the border color of the polygons to black
+               size = 0.1,            # Set the border size for better visibility
+               fill = "snow3") +      # Fill the polygons with a light snow color
+
+  # Set the coordinate system for the map with specific limits on x and y axes
+  coord_map(xlim = c(4.5, 17),      # Set longitude limits for the plot
+            ylim = c(45.5, 55)) +   # Set latitude limits for the plot
+
+  # Use a minimal theme for cleaner visuals
   theme_minimal() +  
+
+  # Add points to the map based on data from the merger data frame
   geom_point(data = merger, 
-             aes(x = lng, y = lat, col = Anteil, size = (count1+count2)), 
-             alpha = 0.9)  +
-  #comment out line below to lose city labels
-  #geom_text(data = merger, aes(x = lng, y = lat, label=city), hjust=0.1, vjust=0.1, size = 2) +
+             aes(x = lon, y = lat,                # Map longitude and latitude for points
+                 col = Proportion,                 # Color points based on the 'Proportion' variable
+                 size = (count1 + count2)),      # Size of points based on the sum of count1 and count2
+             alpha = 0.9) +                      # Set the transparency of the points
+
+  # Uncomment the line below to display city labels on the map
+  # geom_text(data = merger, aes(x = lng, y = lat, label = city), hjust = 0.1, vjust = 0.1, size = 2) +
+
+  # Suppress the size legend in the plot
   guides(size = FALSE) +
+
+  # Create a color gradient for the points from low to high proportions
   scale_color_gradient(low = "seagreen3", high = "mediumpurple3") +
-  labs(size="Anteil") +
-  ggtitle("nicht und nöd im deutschsprachigen Raum") +
-  theme(axis.title.x = element_blank(), 
-        axis.title.y = element_blank(),
-        axis.text.x = element_blank(),
-        axis.text.y = element_blank(),
-        panel.grid.major = element_blank(),
-        plot.title = element_text(hjust = 0.5))
+
+  # Set labels for the size legend
+  labs(size = "Anteil") +
+
+  # Add a title to the plot
+  ggtitle("nächstes/n monat") +
+
+  # Customize theme elements to improve plot appearance
+  theme(axis.title.x = element_blank(),   # Remove x-axis title
+        axis.title.y = element_blank(),   # Remove y-axis title
+        axis.text.x = element_blank(),     # Remove x-axis text labels
+        axis.text.y = element_blank(),     # Remove y-axis text labels
+        panel.grid.major = element_blank(), # Remove major grid lines
+        plot.title = element_text(hjust = 0.5)) # Center the plot title
 ```
 
-This is the map for a single count:
-
-```{r mapping single}
-ggplot() + geom_polygon(data = DACH_coord, 
-                        aes(x = long, y = lat, group = region),
-                        colour = "black", 
-                        size = 0.1, 
-                        fill = "gray95") + 
-  coord_map(xlim = c(4.5, 17),  
-            ylim = c(45.5, 55)) + 
-  theme_minimal() +  
+```{r mapping_double_darkmode}
+# Begin creating a ggplot object
+ggplot() + 
+  
+  # Add spatial features (geometries) for the DACH countries using the gsa_plot data frame
+  geom_sf(data = gsa_plot, 
+          aes(geometry = geometry),  # Map geometries directly from the sf object
+          color = "snow2",           # Set the border color of the shapes to a light snow color
+          fill = "#303030",          # Fill the shapes with a dark gray color
+          size = 0.5) +              # Set the size of the borders for visibility
+  
+  # Add points to the map based on data from the merger data frame
   geom_point(data = merger, 
-             aes(x = lon, y = lat, size = Frequency),
-             colour = "darkorchid4",
-             alpha = 0.7)  +
-  #geom_text(data = merger, aes(x = lng, y = lat, label=city), hjust=0.1, vjust=0.1, size = 2) +
-  guides(color = "none") +
-  labs(size="Frequency") +
-  ggtitle("'Der' in the GSA") +
-  theme(axis.title.x = element_blank(), 
-        axis.title.y = element_blank(),
-        axis.text.x = element_blank(),
-        axis.text.y = element_blank(),
-        panel.grid.major = element_blank(),
-        plot.title = element_text(hjust = 0.5))
+             aes(x = lon, y = lat,               # Map longitude and latitude for points
+                 col = Proportion,                # Color points based on the 'Proportion' variable
+                 size = (Frequency.x + Frequency.y)),  # Size of points based on the sum of frequency counts
+             alpha = 0.9) +                     # Set the transparency of the points
+  
+  # Add text labels for cities on the map using cities_sf data
+  geom_sf_text(data = cities_sf, 
+               aes(label = City),               # Use the 'City' variable for labeling
+               size = 2.5,                      # Set the size of the text labels
+               nudge_x = 0,                     # No horizontal nudging
+               nudge_y = -0.15,                 # Slightly nudge labels downward for better visibility
+               family = "Optima",               # Specify font family for the labels
+               color = "snow2") +               # Set label color to light snow color
+  
+  # Add markers (crosses) for cities using the same cities_sf data
+  geom_sf(data = cities_sf, 
+          aes(geometry = geometry),         # Map the geometries for city markers
+          shape = 4,                       # Set shape to a cross (type 4)
+          color = "snow2") +               # Set color of the markers to light snow
+  
+  # Use a minimal theme for cleaner visuals
+  theme_minimal() +  
+  
+  # Suppress the size legend in the plot
+  guides(size = FALSE) +
+  
+  # Create a color gradient for the points from low to high proportions
+  scale_color_gradient(low = "blue", high = "firebrick1") +
+  
+  # Set a label for the color legend
+  labs(col = "schau / guck") +  # add legend heading
+  
+  # Customize various theme elements for better visual appeal
+  theme(axis.title.x = element_blank(),          # Remove x-axis title
+        axis.title.y = element_blank(),          # Remove y-axis title
+        axis.text.x = element_blank(),            # Remove x-axis text labels
+        axis.text.y = element_blank(),            # Remove y-axis text labels
+        legend.position = c(0.90, 0.65),          # Position the legend within the plot area
+        legend.title = element_text(size = 6, color = "snow", family = "Optima"),  # Customize legend title font
+        legend.text = element_text(size = 6, color = "snow", family = "Optima", hjust = 1),  # Customize legend text font
+        legend.title.align = 0,                    # Align legend title to the left
+        panel.background = element_rect(fill = "#303030", color = "#303030"),  # Set panel background to dark gray
+        plot.background = element_rect(fill = "#303030", color = "#303030"),   # Set overall plot background to dark gray
+        legend.key.size = unit(0.3, "cm"),        # Set the size of legend keys
+        legend.key.width = unit(0.4, "cm"),       # Set the width of legend keys
+        panel.grid.major = element_blank())        # Remove major grid lines
+```
+
+
+```{r mapping_double_lightmode_updated}
+# Begin creating a ggplot object
+ggplot() + 
+
+  # Add spatial features (geometries) for the DACH countries using the gsa_plot data frame
+  geom_sf(data = gsa_plot, 
+          aes(geometry = geometry),  # Map geometries directly from the sf object
+          color = "black",           # Set the border color of the shapes to black
+          fill = "snow1",           # Fill the shapes with a light snow color
+          size = 0.5) +             # Set the size of the borders for visibility
+
+  # Add points to the map based on data from the merger data frame
+  geom_point(data = merger, 
+             aes(x = lon, y = lat,                # Map longitude and latitude for points
+                 col = Proportion,                 # Color points based on the 'Proportion' variable
+                 size = (Frequency.x + Frequency.y)),  # Size of points based on the sum of frequency counts
+             alpha = 0.9) +                      # Set the transparency of the points
+
+  # Use a minimal theme for cleaner visuals
+  theme_minimal() +  
+
+  # Suppress the size legend in the plot
+  guides(size = FALSE) +
+
+  # Create a color gradient for the points from low to high proportions
+  scale_color_gradient(low = "seagreen3", high = "mediumpurple3") +
+
+  # Set a label for the color legend
+  labs(col = "schau / guck") +  # 'schau / guck' translates to 'look / see' in English
+
+  # Customize various theme elements for better visual appeal
+  theme(axis.title.x = element_blank(),          # Remove x-axis title
+        axis.title.y = element_blank(),          # Remove y-axis title
+        axis.text.x = element_blank(),            # Remove x-axis text labels
+        axis.text.y = element_blank(),            # Remove y-axis text labels
+        legend.position = c(0.90, 0.65),          # Position the legend within the plot area
+        legend.title = element_text(size = 6, color = "black", family = "Optima"),  # Customize legend title font
+        legend.text = element_text(size = 6, color = "black", family = "Optima", hjust = 1),  # Customize legend text font
+        legend.title.align = 0,                    # Align legend title to the left
+        legend.key.size = unit(0.3, "cm"),        # Set the size of legend keys
+        legend.key.width = unit(0.4, "cm"),       # Set the width of legend keys
+        panel.grid.major = element_blank())        # Remove major grid lines
+```
+
+
+This is the map for a single count in dark mode, followed by the light mode version.
+
+```{r mapping_single_darkmode}
+# Begin creating a ggplot object
+ggplot() + 
+  
+  # Add spatial features (geometries) for the DACH countries using the gsa_plot data frame
+  geom_sf(data = gsa_plot, 
+          aes(geometry = geometry),  # Map geometries directly from the sf object
+          color = "snow2",           # Set the border color of the shapes to a light snow color
+          fill = "#303030",          # Fill the shapes with a dark gray color
+          size = 0.5) +              # Set the size of the borders for visibility
+  
+  # Add points to the map based on data from the merger data frame
+  geom_point(data = merger, 
+             aes(x = lon, y = lat,          # Map longitude and latitude for points
+                 size = Frequency),           # Size of points based on the 'Frequency' variable
+             col = "purple",                 # Set the color of the points to purple
+             alpha = 0.9) +                  # Set the transparency of the points
+  
+  # Add text labels for cities on the map using cities_sf data
+  geom_sf_text(data = cities_sf, 
+               aes(label = City),             # Use the 'City' variable for labeling
+               size = 2.5,                    # Set the size of the text labels
+               nudge_x = 0,                   # No horizontal nudging
+               nudge_y = -0.15,               # Slightly nudge labels downward for better visibility
+               family = "Optima",             # Specify font family for the labels
+               color = "snow2") +             # Set label color to light snow color
+  
+  # Add markers (crosses) for cities using the same cities_sf data
+  geom_sf(data = cities_sf, 
+          aes(geometry = geometry),       # Map the geometries for city markers
+          shape = 4,                     # Set shape to a cross (type 4)
+          color = "snow2") +             # Set color of the markers to light snow
+  
+  # Use a minimal theme for cleaner visuals
+  theme_minimal() +  
+  
+  # Suppress the size legend in the plot
+  guides(size = "none") +            # 'none' disables the legend for size
+  
+  # Customize various theme elements for better visual appeal
+  theme(axis.title.x = element_blank(),          # Remove x-axis title
+        axis.title.y = element_blank(),          # Remove y-axis title
+        axis.text.x = element_blank(),            # Remove x-axis text labels
+        axis.text.y = element_blank(),            # Remove y-axis text labels
+        panel.background = element_rect(fill = "#303030", color = "#303030"),  
+        # Set panel background to dark gray
+        plot.background = element_rect(fill = "#303030", color = "#303030"),   
+        # Set overall plot background to dark gray
+        panel.grid.major = element_blank())        # Remove major grid lines
+```
+
+```{r mapping_single}
+# Start creating a ggplot object
+ggplot() + 
+  
+  # Add spatial features (geometries) for the DACH countries using the gsa_plot data frame
+  geom_sf(data = gsa_plot, 
+          aes(geometry = geometry),        # Map geometries directly from the sf object
+          colour = "black",                # Set the border color of the shapes to black
+          size = 0.5,                      # Set the size of the borders for visibility
+          fill = "gray95") +               # Fill the shapes with a light gray color
+  
+  # Add points to the map based on data from the merger data frame
+  geom_point(data = merger, 
+             aes(x = lon, y = lat,        # Map longitude and latitude for points
+                 size = Frequency),         # Size of points based on the 'Frequency' variable
+             colour = "darkorchid4",       # Set the color of the points to a dark orchid color
+             alpha = 0.7) +                # Set the transparency of the points to 70%
+  
+  # Add text labels for cities on the map using cities_sf data
+  geom_sf_text(data = cities_sf, 
+               aes(label = City),           # Use the 'City' variable for labeling
+               size = 2.5,                  # Set the size of the text labels
+               nudge_x = 0,                 # No horizontal nudging
+               nudge_y = -0.15,             # Slightly nudge labels downward for better visibility
+               family = "Optima",           # Specify font family for the labels
+               color = "black") +           # Set label color to black
+  
+  # Add markers (crosses) for cities using the same cities_sf data
+  geom_sf(data = cities_sf, 
+          aes(geometry = geometry),       # Map the geometries for city markers
+          shape = 4,                     # Set shape to a cross (type 4)
+          color = "black") +             # Set color of the markers to black
+  
+  # Use a minimal theme for cleaner visuals
+  theme_minimal() +  
+  
+  # Suppress the size legend in the plot
+  guides(size = "none") +            # 'none' disables the legend for size
+  
+  # Customize various theme elements for better visual appeal
+  theme(axis.title.x = element_blank(),          # Remove x-axis title
+        axis.title.y = element_blank(),          # Remove y-axis title
+        axis.text.x = element_blank(),            # Remove x-axis text labels
+        axis.text.y = element_blank(),            # Remove y-axis text labels
+        panel.grid.major = element_blank())        # Remove major grid lines
 ```
 
 
 Maps can then be easily exported using the following code chunk.
 
 ```{r export}
-ggsave("./output/full_german1.png", width = 6.5, height = 5.5)
+# Save the current ggplot object to a PNG file
+ggsave("./output/full_german1.png",      # Specify the file path and name for the saved plot
+       width = 6.5,                       # Set the width of the saved image in inches
+       height = 5.5)                      # Set the height of the saved image in inches
 ```
 

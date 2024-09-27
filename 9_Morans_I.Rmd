@@ -3,6 +3,8 @@ title: "Moran's I"
 author: "Dana Roemling"
 date: '2023-05-25'
 output: html_document
+toc: true
+toc_float: true
 ---
 
 ```{r setup, include=FALSE}
@@ -12,45 +14,50 @@ knitr::opts_chunk$set(echo = TRUE)
 ## Libraries
 
 ```{r libs}
-library(dplyr)
-library(spdep)
+# Load necessary libraries
+library(dplyr)   # For data manipulation
+library(spdep)   # For spatial analysis
 ```
 
 ## Data 
 
 ```{r data}
-# get all cities in corpus and make geographical matrix out of it based on distance.
+# Read in the geographical coordinates of cities from a CSV file
 longlat <- read.csv(file = './data_maps/gsa_geo_filtered.csv')
 
-# ignore city names
+# Extract only longitude and latitude columns, ignoring city names
 longlat_only <- longlat %>% dplyr::select(lon, lat)
 
-# ling data
-corpus <- read.csv(file = './data_ling/full_matrix_for_filtering.csv') 
-token_at_location <- read.csv(file = './data_ling/tokens_at_location.csv')
-colnames(token_at_location) <- c("City", "Tokencount") 
+# Read in linguistic data and token counts at different locations
+corpus <- read.csv(file = './data_ling/full_matrix_for_filtering.csv')   # Full linguistic matrix
+token_at_location <- read.csv(file = './data_ling/tokens_at_location.csv')  # Token counts by city
+colnames(token_at_location) <- c("City", "Tokencount")   # Rename columns for clarity
 
-# extract feature
-one_word <- corpus %>% filter(word == "nix")
-colnames(one_word) <- c("Token", "City", "Frequency")
-#merge with geo data
-merger_one <- merge(one_word, longlat, by.x ="City", by.y = "City")
-#merger_one_2 <- merge(one_word, longlat_small, by.x ="City", by.y = "City")
-colnames(merger_one) <- c("City", "Token", "Frequency", "lon", "lat")
-# add relative frequency
-merger <- merge(merger_one, token_at_location, by.x ="City", by.y = "City")
-merger$relfreq <- (merger$Frequency/merger$Tokencount)
-merger$relfreq1000 <- (merger$relfreq*1000)
+# Extract data for a specific word from the corpus
+one_word <- corpus %>% filter(word == "nix")   # Filter for the word "nix"
+colnames(one_word) <- c("Token", "City", "Frequency")  # Rename columns for clarity
+
+# Merge the filtered data with geographic data (adding longitude and latitude to each city)
+merger_one <- merge(one_word, longlat, by.x = "City", by.y = "City")  # Merge on city names
+colnames(merger_one) <- c("City", "Token", "Frequency", "lon", "lat")  # Rename columns after merge
+
+# Merge the data again, this time adding token count data to calculate relative frequency
+merger <- merge(merger_one, token_at_location, by.x = "City", by.y = "City")
+merger$relfreq <- (merger$Frequency / merger$Tokencount)  # Calculate relative frequency per token count
+merger$relfreq1000 <- (merger$relfreq * 1000)  # Scale relative frequency per 1000 tokens
+
+# Rename columns for clarity
 colnames(merger) <- c("City", "Token", "Frequency", "lon", "lat", "TokenCount", "RelativeFrequency", "RelativeFrequencyThousand")
-# exclude first quantile / low frequency locations
-quant <- summary(merger$TokenCount)[2]
-merger <- merger %>% filter(TokenCount > quant)
 
-# small version of merger
+# Exclude cities with token counts in the first quantile (low-frequency locations)
+quant <- summary(merger$TokenCount)[2]  # Calculate the first quantile of token count
+merger <- merger %>% filter(TokenCount > quant)  # Filter out cities with token counts <= first quantile
+
+# Create a smaller version of the merged data with only relevant columns
 merger_small <- merger %>% dplyr::select("City", "lon", "lat", "RelativeFrequency")
 
-# order by lon
-merger_small <- merger_small[order(merger_small$lon,decreasing=TRUE),]
+# Sort the smaller dataset by longitude in decreasing order
+merger_small <- merger_small[order(merger_small$lon, decreasing=TRUE),]  # Order by longitude
 ```
 
 ## Resolve duplicate long/lat points
@@ -58,13 +65,17 @@ merger_small <- merger_small[order(merger_small$lon,decreasing=TRUE),]
 Given the above corpus search, resolve duplicate places by getting their mean (of relative frequency) using the aggregate function below.
 
 ```{r resolve duplicates}
-# Spatial data analysis may fail, so I need to sort my duplicates. Since they are at the same location,
-# easiest would be to just sum them
-merger_single <- aggregate(merger_small$RelativeFrequency, by=list(lon=merger_small$lon, lat=merger_small$lat), FUN=mean)
-# reorder so we keep same order
-merger_single <- merger_single[order(merger_single$lon,decreasing=TRUE),]
-# readable names
-colnames(merger_single) <- c("lon", "lat", "RelativeFrequency")
+# Perform spatial data analysis, which may fail if there are duplicate entries at the same location.
+# To handle duplicates, sum their relative frequencies for those locations.
+merger_single <- aggregate(merger_small$RelativeFrequency, 
+                           by=list(lon=merger_small$lon, lat=merger_small$lat), 
+                           FUN=mean)  # Aggregate by longitude and latitude, taking the mean of RelativeFrequency
+
+# Reorder the merged data to maintain the same order based on longitude in decreasing order.
+merger_single <- merger_single[order(merger_single$lon, decreasing=TRUE),] 
+
+# Rename columns for clarity and readability, indicating that they represent coordinates and relative frequency.
+colnames(merger_single) <- c("lon", "lat", "RelativeFrequency")  
 ```
 
 ## Moran's I
@@ -72,20 +83,28 @@ colnames(merger_single) <- c("lon", "lat", "RelativeFrequency")
 Check help(nb2listw) to see different styles for weighting. 
 
 ```{r moran}
-# get only long lat
+# Extract only the longitude and latitude columns from the aggregated data for further spatial analysis.
 longlat_variable <- merger_single %>% dplyr::select(lon, lat)
-# get knn
-# If longlat = TRUE, Great Circle distances are used
+
+# Calculate the k-nearest neighbors (knn) using the geographical coordinates.
+# If longlat = TRUE, Great Circle distances are used for calculating distances between points.
+# More information on this can be found in the tutorial linked below.
 # https://spatialanalysis.github.io/lab_tutorials/Distance_Based_Spatial_Weights.html
-knn <- knn2nb(knearneigh(coordinates(longlat_variable), k = 10, longlat = TRUE))
-# include self
+knn <- knn2nb(knearneigh(coordinates(longlat_variable), k = 10, longlat = TRUE))  # Get 10 nearest neighbors
+
+# Include the self-neighbor in the knn list to ensure that each location is considered its own neighbor.
 knn <- include.self(knn)
-# assign weights
+
+# Convert the knn object into a list of spatial weights.
+# The weights are based on the neighbors found, and zero.policy = TRUE allows for handling cases with no neighbors.
+# More about this process can be found in the following link.
 # https://mgimond.github.io/simple_moransI_example/
-weighted_knn <- nb2listw(knn, style="W", zero.policy=TRUE)
-# calculate moran
+weighted_knn <- nb2listw(knn, style = "W", zero.policy = TRUE)
+
+# Calculate Moran's I statistic for spatial autocorrelation based on the relative frequencies.
+# The function returns a vector, so we extract the first element which represents the Moran's I value.
+# The formula used for the calculation is adapted from the provided example link.
 moran <- moran(merger_single$RelativeFrequency, weighted_knn, length(knn), Szero(weighted_knn))[1]
-# formula adapted from https://mgimond.github.io/simple_moransI_example/
 ```
 
 It is important that all data inputted into the moran() is ordered the same way, because the order will determine alignment of variable data, location and neighbours. 
@@ -97,7 +116,11 @@ It is important that all data inputted into the moran() is ordered the same way,
 
 
 ```{r check knn order}
-knn_check <- knn2nb(knearneigh(coordinates(longlat_variable), k = 2, longlat = TRUE))
+# Calculate the k-nearest neighbors (knn) for the geographical coordinates in longlat_variable.
+# Here, k = 2 indicates that we are looking for the 2 nearest neighbors for each point.
+# The longlat = TRUE argument ensures that Great Circle distances are used, which is appropriate for geographical coordinates.
+# The knn2nb function converts the knn object into a neighbor list format suitable for spatial analysis.
+knn_check <- knn2nb(knearneigh(coordinates(longlat_variable), k = 2, longlat = TRUE))  
 ```
 
 As there is no long/lat in knn, so with 2 nearest, I can check for plausibility of nearest neighbours. 
@@ -110,7 +133,3 @@ In this example case, Wien has the neighbours Wiener Neudorf and Leoben. Same fo
 https://en.wikipedia.org/wiki/Moran%27s_I
 Values of I usually range from −1 to +1. Values significantly below -1/(N-1) indicate negative spatial autocorrelation and values significantly above -1/(N-1) indicate positive spatial autocorrelation.
 Moran's I is inversely related to Geary's C, but it is not identical. Moran's I is a measure of global spatial autocorrelation, while Geary's C is more sensitive to local spatial autocorrelation.
-
-
-
-

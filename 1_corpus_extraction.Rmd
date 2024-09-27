@@ -3,6 +3,8 @@ title: "Corpus Extraction from JSON"
 author: "Dana"
 date: "29/03/2022"
 output: html_document
+toc: true
+toc_float: true
 ---
 
 ```{r setup, include=FALSE}
@@ -16,18 +18,24 @@ In this markdown I will summarise all the steps needed to prepare the original c
 The first step is handling the large json files on my machine. In order to trial a couple of lines of the corpus, bash/terminal (on Mac) was used to extract parts of the corpus. This chunk gets the first 10 lines of a file and saves it in a test.json.
 
 ```{r bash 1}
+# Extract the first 10 lines from the 'jodel_archive.json' file and save them to 'test.json'.
 head -n 10 /Users/dana/Desktop/jodel_archive.json > test.json
 ```
 
 In case the last line of the json is incomplete (which would prevent it from being read in), the next chunk will delete the last line as it takes all lines except the last and creates a new active.json file.
 
 ```{r bash 2}
+# Create 'active.json' by copying all lines from 'jodel_archive.json' except for the last line.
+# The wc -l < jodel_archive.json command counts the total number of lines in the file.
+# $(...) is used for command substitution to compute the line count.
 head -$(($(wc -l < jodel_archive.json) - 1)) jodel_archive.json > active.json
 ```
 
 In order to run the corpus on the BEAR HPC it was necessary to split the two original files up in multiple smaller files, which could then run in parallel. The next chunk splits up the original file into new files with each 100000 lines. The prefix for all new files is XY.
 
 ```{r bash 3}
+# Split 'active.json' into multiple files with each file containing 100,000 lines.
+# The output files will be named with a prefix 'XY', followed by a suffix that indicates the file number.
 split -l 100000 data_ling/data_active/active.json XY
 ```
 
@@ -36,31 +44,63 @@ split -l 100000 data_ling/data_active/active.json XY
 The json structure is nested. This means information is embedded in a tree structure, which needs to be extracted in order to make all posts in the corpus accessible. This next chunk first takes a json file as input and creates an initial data frame. Then the first level of the tree structure is extracted by using the flatten function. Only four columns then are used in a new smaller data frame as most of the detailed information is not necessary for the analysis. Then the new corpus was created: A for loop  extracts the child posts from their one cell and appends them to the corpus, so that for all posts message, time stamp, ID and location are saved. After that the corpus is transformed into a data frame and column names are added. Then the corpus can be exported.
 
 ```{r unnest}
-library(dplyr)
-library(purrr)
-library(jsonlite)
+# Load necessary libraries for data manipulation and JSON handling.
+library(dplyr)    # For data manipulation and selection
+library(purrr)    # For functional programming utilities
+library(jsonlite)  # For reading and flattening JSON data
+
+# Read the JSON file and stream it into a data frame. 
+# This is useful for handling large JSON files without loading everything into memory at once.
 df <- stream_in(file("/rds/projects/g/grievej-german-dialect-profiling/100k/1.json"))
+
+# Flatten the nested structure of the JSON data into a more manageable format.
+# Setting recursive = TRUE allows for deep flattening of nested lists.
 df <- jsonlite::flatten(df, recursive = TRUE)
+
+# Select specific columns of interest from the flattened data frame.
 df_small <- select(df, message, created_at, location.name, post_id, children)
+
+# Combine the selected columns into a new data frame called 'corpus'.
+# This data frame initially contains messages and their associated metadata.
 corpus <- cbind(df_small$message, df_small$created_at, df_small$location.name, df_small$post_id)
+
+# Loop through each row of the original data frame to extract information from the 'children' field.
 for (i in 1:nrow(df))
 {
-  
+  # Convert the 'children' field of the current row into a data frame.
   children <- as.data.frame(df_small$children[i])
+
+  # Combine the relevant fields from the 'children' data frame into 'children_split'.
   children_split <- cbind(children$message, children$created_at, children$location$name, children$post_id)
+
+  # Append the data from 'children_split' to the 'corpus' data frame.
   corpus <- rbind(corpus, children_split)
 }
+
+# Convert 'corpus' to a data frame (if it's not already) to ensure proper data structure.
 corpus <- as.data.frame(corpus)
+
+# Rename the columns of the 'corpus' data frame for clarity and consistency.
 colnames(corpus) <- c("message", "created_at", "location", "post_id")
-write.csv(corpus,"part1.csv", fileEncoding = "UTF-8", row.names = FALSE)
+
+# Write the final data frame to a CSV file, ensuring the file is saved with UTF-8 encoding 
+# and without row names for a clean output.
+write.csv(corpus, "part1.csv", fileEncoding = "UTF-8", row.names = FALSE)
 ```
 
 In order to see if the code was running correctly, time stamps were created to check on progress.
 
 ```{r time}
-#logging 
+# Logging messages to track the progress of the script execution.
+
+# Print a message indicating the start of the process.
 print("Start:")
+
+# Capture the current system time and assign it to 'currentTime'.
+# This can be useful for measuring how long the script takes to run or for debugging.
 currentTime <- Sys.time()
+
+# Print the current time to the console to provide a timestamp for when the process started.
 print(currentTime)
 ```
 
@@ -68,6 +108,10 @@ This process was done for all 29 split up files of the original two json files. 
 For that all small files were read in and then appended. Column names were added and the new file exported.
 
 ```{r together}
+# Load the necessary libraries
+# library(dplyr) # Uncomment if dplyr functions are used in the code
+
+# Read CSV files for parts 1 and 2 from the specified directory and store them in variables
 one <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/extracted/1.csv')
 two <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/extracted/2.csv')
 three <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/extracted/3.csv')
@@ -82,10 +126,16 @@ eleven <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/extr
 twelve <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/extracted/12.csv')
 thirteen <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/extracted/13.csv')
 
+# Combine the data frames for part 1 into a single data frame using rbind
 part1 <- rbind(one, two, three, four, five, six, seven, eight, nine, ten, eleven, twelve, thirteen)
-colnames(part1) <- c("message", "created_at", "location", "post_id")
-write.csv(part1,"/rds/projects/g/grievej-german-dialect-profiling/part1.csv", fileEncoding = "UTF-8", row.names = FALSE)
 
+# Rename columns of the combined data frame for clarity
+colnames(part1) <- c("message", "created_at", "location", "post_id")
+
+# Write the combined data frame for part 1 to a CSV file with UTF-8 encoding, excluding row names
+write.csv(part1, "/rds/projects/g/grievej-german-dialect-profiling/part1.csv", fileEncoding = "UTF-8", row.names = FALSE)
+
+# Read CSV files for parts A to P from the specified directory and store them in variables
 A <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/extracted/A.csv')
 B <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/extracted/B.csv')
 C <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/extracted/C.csv')
@@ -103,12 +153,20 @@ N <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/extracted
 O <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/extracted/O.csv')
 P <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/extracted/P.csv')
 
+# Combine the data frames for part 2 into a single data frame using rbind
 part2 <- rbind(A, B, C, D, E, FF, G, H, I, J, K, L, M, N, O, P)
-colnames(part2) <- c("message", "created_at", "location", "post_id")
-write.csv(part2,"/rds/projects/g/grievej-german-dialect-profiling/part2.csv", fileEncoding = "UTF-8", row.names = FALSE)
 
+# Rename columns of the combined data frame for clarity
+colnames(part2) <- c("message", "created_at", "location", "post_id")
+
+# Write the combined data frame for part 2 to a CSV file with UTF-8 encoding, excluding row names
+write.csv(part2, "/rds/projects/g/grievej-german-dialect-profiling/part2.csv", fileEncoding = "UTF-8", row.names = FALSE)
+
+# Combine both parts into a total data frame using rbind
 total <- rbind(part1, part2)
-write.csv(total,"/rds/projects/g/grievej-german-dialect-profiling/total.csv", fileEncoding = "UTF-8", row.names = FALSE)
+
+# Write the total combined data frame to a CSV file with UTF-8 encoding, excluding row names
+write.csv(total, "/rds/projects/g/grievej-german-dialect-profiling/total.csv", fileEncoding = "UTF-8", row.names = FALSE)
 ```
 
 This, in total, created extracted versions of the original two json files and a combined file, with all the information in one place. 
