@@ -1,0 +1,684 @@
+---
+title: "Kriging by Country Workflow"
+author: "Dana Roemling"
+date: '2024-02-09'
+output: html_document
+toc: true
+toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Kriging by Country
+
+The idea for this markdown is to first check which is the most likely country of origin for a text and then use only the data from that country for further analysis. 
+
+```{r setting_up, echo=FALSE, message=FALSE, results='hide', warning=FALSE}
+# Libraries
+library(dplyr)
+library(spdep)
+library(sf)
+library(sp)
+library(tidyverse)
+library(gstat)
+library(stringr) 
+library(rnaturalearth)
+
+# Data
+# /rds/projects/g/grievej-german-dialect-profiling/kriged/
+kriged_all <- read.csv(file = 
+                     'data_ling/kriged/kriged_10k_300cutoff.csv', 
+                   header = TRUE) 
+names(kriged_all) <- gsub("\\.", "", names(kriged_all))
+names(kriged_all) <- gsub("\\<X", "", names(kriged_all))
+kriged_all <- kriged_all %>% dplyr::select(1:2002)
+
+kriged_ger <- read.csv(file = 
+                     'data_ling/kriged/kriged_5k_300cutoff_germany.csv', 
+                   header = TRUE) 
+names(kriged_ger) <- gsub("\\.", "", names(kriged_ger))
+names(kriged_ger) <- gsub("\\<X", "", names(kriged_ger))
+kriged_ger <- kriged_ger %>% dplyr::select(1:2002)
+
+kriged_aus <- read.csv(file = 
+                     'data_ling/kriged/kriged_5k_300cutoff_austria.csv', 
+                   header = TRUE) 
+names(kriged_aus) <- gsub("\\.", "", names(kriged_aus))
+names(kriged_aus) <- gsub("\\<X", "", names(kriged_aus))
+kriged_aus <- kriged_aus %>% dplyr::select(1:2002)
+
+kriged_swi <- read.csv(file = 
+                     'data_ling/kriged/kriged_5k_300cutoff_switzerland.csv', 
+                   header = TRUE) 
+names(kriged_swi) <- gsub("\\.", "", names(kriged_swi))
+names(kriged_swi) <- gsub("\\<X", "", names(kriged_swi))
+kriged_swi <- kriged_swi %>% dplyr::select(1:2002)
+
+# Geo stuff
+ger_outline <- ne_countries(country = "Germany", returnclass="sf", scale = "large")
+ger_plot <- ger_outline %>% dplyr::select(geometry) 
+ger_spatial <- as_Spatial(ger_plot) 
+aus_outline <- ne_countries(country = "Austria", returnclass="sf", scale = "large")
+aus_plot <- aus_outline %>% dplyr::select(geometry) 
+aus_spatial <- as_Spatial(aus_plot) 
+swi_outline <- ne_countries(country = "Switzerland", returnclass="sf", scale = "large")
+swi_plot <- swi_outline %>% dplyr::select(geometry) 
+swi_spatial <- as_Spatial(swi_plot) 
+ger_states <- ne_states(country = "Germany", returnclass = "sf")
+ger_states_plot <- ger_states %>% dplyr::select(geometry)
+ger_states_spatial <- as_Spatial(ger_states_plot) 
+aus_states <- ne_states(country = "Austria", returnclass = "sf")
+aus_states_plot <- aus_states %>% dplyr::select(geometry)
+aus_states_spatial <- as_Spatial(aus_states_plot) 
+swi_states <- ne_states(country = "Switzerland", returnclass = "sf")
+swi_states_plot <- swi_states %>% dplyr::select(geometry)
+swi_states_spatial <- as_Spatial(swi_states_plot) 
+crs3 <- CRS("+init=epsg:4326") 
+crs2 <- st_crs(4326)
+
+cities_ger <- data.frame(
+  City = c("Köln", "München", "Berlin", "Hamburg", "Frankfurt", "Kassel"),
+  Long = c(6.9578, 11.5755, 13.3833, 10, 8.6821, 9.4797),
+  Lat = c(50.9422, 48.1372, 52.5167, 53.55, 50.1109, 51.3127))
+cities_ger_sf <- st_as_sf(cities_ger, coords = c("Long", "Lat"), crs = crs2)
+sp_grid_ger <- as.data.frame(spsample(ger_spatial,
+                                  n = 100000,
+                                  type = "regular", # systematically aligned sampling
+                                  offset = c(0.5,0.5))) # makes sure grid is the same every time
+sp_grid_ger_sf <- st_as_sf(sp_grid_ger, coords=c("x1","x2"), crs = crs2)
+
+cities_aus <- data.frame(
+  City = c("Wien", "Graz", "Innsbruck"),
+  Long = c(16.3731, 15.4333, 11.3933),
+  Lat = c(48.2083, 47.0667, 47.2683))
+cities_aus_sf <- st_as_sf(cities_aus, coords = c("Long", "Lat"), crs = crs2)
+sp_grid_aus <- as.data.frame(spsample(aus_spatial,
+                                  n = 50000,
+                                  type = "regular", # systematically aligned sampling
+                                  offset = c(0.5,0.5))) # makes sure grid is the same every time
+sp_grid_aus_sf <- st_as_sf(sp_grid_aus, coords=c("x1","x2"), crs = crs2)
+
+cities_swi <- data.frame(
+  City = c("Zürich", "Bern"),
+  Long = c(8.5417, 7.4474),
+  Lat = c(47.3769, 46.9480))
+cities_swi_sf <- st_as_sf(cities_swi, coords = c("Long", "Lat"), crs = crs2)
+sp_grid_swi <- as.data.frame(spsample(swi_spatial,
+                                  n = 50000,
+                                  type = "regular", # systematically aligned sampling
+                                  offset = c(0.5,0.5))) # makes sure grid is the same every time
+sp_grid_swi_sf <- st_as_sf(sp_grid_swi, coords=c("x1","x2"), crs = crs2)
+```
+
+Set up the data you want to analyse.
+
+```{r strings}
+# input the words you want to map
+strings <- tolower(c("aber", "eigentlich", "isses", "mir", "echt", "egal", "bin", "auch", "offen", "für", "kreative", "sachen"))
+strings <- unique(strings)
+
+strings <- tolower(c("Danke", "Endlich", "mal", "jemand", "der", "aus", "Erfahrung", "spricht", "Wie", "gesagt", "ich", "gehe", "mit", "meinem", "Hund", "zum", "Arzt", "aber", "geht", "ihr", "zum", "Arzt", "wenn", "ihr", "mal", "2", "Tage", "hustet", "Ich", "denke", "nicht"))
+strings <- unique(strings)
+
+# OR
+strings <- tolower(readLines("/rds/projects/g/grievej-german-dialect-profiling/liste.txt"))
+strings <- trimws(unlist(strsplit(strings, ",")))
+```
+
+
+
+## Determining Max Value Country
+
+First, I need to determine which country, based on the overall/averaged kriged values, contains the max point. 
+
+```{r country_pred_function}
+country_prediction <- function(strings) {
+  kriged_values <- kriged_all %>% select(c("lon", "lat"))
+  
+  for (cname in strings) {
+    if (cname %in% colnames(kriged_all)) {
+    kriged_values[, paste0(cname)] <- as.numeric(unlist(kriged_all[, cname]))
+    }
+  }
+  
+  data_for_calculations <- kriged_values %>% select(-lon, -lat)
+  calculation <- kriged_values %>% select(lon, lat)
+  calculation$mean_val <- rowMeans(data_for_calculations)
+  calculation$median_val <- apply(data_for_calculations, 1, median)
+  calculation$sd_val <- apply(data_for_calculations, 1, sd)
+  
+  # get max
+  mean_pred <- calculation %>% 
+    filter(mean_val > 0) %>% 
+    arrange(desc(mean_val)) %>%
+    slice (1:1) %>% 
+    dplyr::select(mean_val, lon, lat)
+  
+  median_pred <- calculation %>% 
+    filter(median_val > 0) %>% 
+    arrange(desc(median_val)) %>%
+    slice (1:1) %>% 
+    dplyr::select(median_val, lon, lat)
+  
+  # transform max into sf
+  mean_pred_sf <- st_as_sf(mean_pred, coords = c("lon", "lat"), crs = crs2)
+  median_pred_sf <- st_as_sf(median_pred, coords = c("lon", "lat"), crs = crs2)  
+  
+  # check if those are within countries:
+  Germany_mean <- ger_outline %>% st_contains(mean_pred_sf) %>% as.matrix()
+  Austria_mean <- aus_outline %>% st_contains(mean_pred_sf) %>% as.matrix()
+  Switzerland_mean <- swi_outline %>% st_contains(mean_pred_sf) %>% as.matrix()
+  Germany_median <- ger_outline %>% st_contains(median_pred_sf) %>% as.matrix()
+  Austria_median <- aus_outline %>% st_contains(median_pred_sf) %>% as.matrix()
+  Switzerland_median <- swi_outline %>% st_contains(median_pred_sf) %>% as.matrix()
+  
+  answer <- data.frame(matrix(ncol = 3, nrow = 2))
+  colnames(answer) <- c("Germany", "Austria", "Switzerland")
+  rownames(answer) <- c("Mean", "Median")
+  
+  if (Germany_mean == 1) {
+    answer[1,1] <- TRUE
+    }
+  if (Austria_mean == 1) {
+    answer[1,2] <- TRUE
+    }
+  if (Switzerland_mean == 1) {
+    answer[1,3] <- TRUE
+    }
+  if (Germany_median == 1) {
+    answer[2,1] <- TRUE
+    }
+  if (Austria_median == 1) {
+    answer[2,2] <- TRUE
+    }
+  if (Switzerland_mean == 1) {
+    answer[2,3] <- TRUE
+    }
+  return(list(
+    answer = answer,
+    max_val = mean_pred
+  ))
+}
+
+# calling function
+resulting_prediction <- country_prediction(strings)
+
+# see both results
+resulting_prediction$answer
+resulting_prediction$max_val
+```
+
+### Max Value of Individual Words
+
+To export where each word has its hotspot, this function loops over the string list and gets those max values and their locations. This is before noise is removed, so it might be smart to do this for a country only. As the input here is a df with long lat as the first to columns, application is flexible. 
+
+```{r max_val_per_word}
+get_max_values <- function(df) {
+  results <- list()
+  
+  # Loop over the columns starting from the third column 
+  for (col_name in names(df)[3:ncol(df)]) {
+    
+    # Set negative to NA to exclude them
+    positive_values <- df[[col_name]]
+    positive_values[positive_values <= 0] <- NA
+    
+    # Find the row index of the maximum value in the current column
+    max_index <- which.max(positive_values)
+    
+    # Check if there are any positive values
+    if (!is.na(max_index) && !is.na(positive_values[max_index])) {
+    
+      # Extract the maximum value
+      max_value <- df[max_index, col_name]
+      
+      # Extract the corresponding longitude and latitude
+      lon <- df[max_index, 1]
+      lat <- df[max_index, 2]
+      
+      # Create a result list for the current column
+      result <- list(
+        word = col_name,
+        max_value = max_value,
+        longitude = lon,
+        latitude = lat
+      )
+    
+      # Append the result to the results list
+      results[[col_name]] <- result
+    } else {
+      
+      # If no positive value is found, store NA
+      result <- list(
+        word = col_name,
+        max_value = NA,
+        longitude = NA,
+        latitude = NA
+      ) 
+      
+      # Append the result to the results list
+      results[[col_name]] <- result
+    }
+  }
+  
+  # Convert the list of results to a data frame
+  results_df <- do.call(rbind, lapply(results, as.data.frame))
+  
+  return(results_df)
+}
+
+# create input for this function as above
+kriged_values <- kriged_all %>% select(c("lon", "lat"))
+for (cname in strings) {
+  if (cname %in% colnames(kriged_all)) {
+  kriged_values[, paste0(cname)] <- as.numeric(unlist(kriged_all[, cname]))
+  }
+}
+
+# input is a dataframe, in which long & lat need to be the first two columns
+output_df <- get_max_values(kriged_values)
+```
+
+
+# Country level code
+
+To make sure the maps that are being created do not get influenced by noise, the code below focusses on each country to krige to a large grid.
+It also contains code to predict the state per country where the max point lies (and extract the max point).
+
+## Germany
+
+```{r ger_kriging}
+# get data for strings
+kriged_values_ger <- kriged_ger %>% select(c("lon", "lat"))
+for (cname in strings) {
+  if (cname %in% colnames(kriged_ger)) {
+    kriged_values_ger[, paste0(cname)] <- as.numeric(unlist(kriged_ger[, cname]))
+  }
+}
+
+# create new list of column names for further operations
+strings <- toString(colnames(kriged_values_ger[3:ncol(kriged_values_ger)]))
+strings <- trimws(unlist(strsplit(strings, ",")))
+
+data_for_calculations_ger <- kriged_values_ger %>% select(-lon, -lat)
+calculation_ger <- kriged_values_ger %>% select(lon, lat)
+calculation_ger$mean_val <- rowMeans(data_for_calculations_ger)
+calculation_ger$median_val <- apply(data_for_calculations_ger, 1, median)
+calculation_ger$sd_val <- apply(data_for_calculations_ger, 1, sd)
+
+calculation_ger_sf <- st_as_sf(calculation_ger, coords = c("lon", "lat"), crs = crs2)
+
+# get max
+mean_pred_ger <- calculation_ger %>% 
+  filter(mean_val > 0) %>% 
+  arrange(desc(mean_val)) %>%
+  slice (1:1) %>% 
+  dplyr::select(mean_val, lon, lat)
+
+median_pred_ger <- calculation_ger %>% 
+  filter(median_val > 0) %>% 
+  arrange(desc(median_val)) %>%
+  slice (1:1) %>% 
+  dplyr::select(median_val, lon, lat)
+
+# Variogram
+data_ger <- calculation_ger["mean_val"]
+coords_ger <- calculation_ger[c("lon", "lat")]
+spdf_ger <- SpatialPointsDataFrame(coords      = coords_ger,
+                               data        = data_ger, 
+                               proj4string = crs3)
+spdf_ger = spdf_ger[which(!duplicated(spdf_ger@coords)), ]
+vg_ger <- variogram(mean_val~1, data = spdf_ger, width = 1, cutoff = 300)
+vg_fit_ger <- fit.variogram(vg_ger, vgm("Exp")) 
+
+# Kriging
+krig_ger <- krige(mean_val~1, 
+               locations = spdf_ger, 
+               newdata = sp_grid_ger_sf, 
+               model = vg_fit_ger)
+```
+
+```{r state_pred_ger}
+# Get point from output above
+max_point1 <- mean_pred_ger
+
+check_state_ger <- function(max_point) {
+  max_point2 <- data.frame(
+    longitude = c(max_point$lon),
+    latitude = c(max_point$lat)) 
+  point_sf <- st_as_sf(max_point2, coords = c("longitude", "latitude"), crs = st_crs(ger_states_plot))
+  
+  # Check if the point is within any state
+  point_within_state <- st_contains(ger_states_plot, point_sf, sparse = FALSE)
+  
+  # Check which state the point is within (if any)
+  state_index <- which(point_within_state, arr.ind = TRUE)
+  state_in <- ifelse(length(state_index) > 0, ger_states$name[state_index[1]], "Outside any state")
+  
+  print(state_in)
+}
+
+# run it
+state_result <- check_state_ger(max_point1)
+print(state_result)
+```
+
+```{r ger_map}
+legend_max_ger <- round(max(krig_ger$var1.pred), digits = 2)
+legend_min_ger <- round(min(krig_ger$var1.pred), digits = 2) 
+
+ggplot() +
+    geom_sf(data = krig_ger, aes(fill=var1.pred), shape = 21, size = 0.75, stroke = 0, lwd = 0) +
+    geom_sf(data = ger_plot, aes(geometry = geometry), color="black", fill=NA, size = 0.5) +
+    geom_sf_text(data = cities_ger_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, family = "Optima") +
+    geom_sf(data = cities_ger_sf, aes(geometry = geometry), shape = 4) +
+    theme_minimal() +
+    scale_fill_steps(low="#ffffff", high="#310d59", n.breaks = 20, labels = NULL) +
+    theme(axis.title.x = element_blank(), 
+          axis.title.y = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          panel.grid.major = element_blank()) +
+    theme(legend.position = c(0.89, 0.35), 
+          legend.title = element_text(size = 6, family = "Optima"), 
+          legend.text = element_text(size = 6, family = "Optima", hjust = 1),
+          legend.title.align = 0,
+          legend.key.size = unit(0.3, "cm"),
+          legend.key.width = unit(0.4,"cm")) +
+    ggplot2::annotate(geom="text", x = 14.9, y = 50.3, label=legend_max_ger, size = 1.5, family = "Optima") +
+    ggplot2::annotate(geom="text", x = 14.9, y = 49.3, label=legend_min_ger, size = 1.5, family = "Optima") +
+    labs(fill = " ")
+
+# jpeg("adios3.jpg", units="in", width=3.78, height=4.8, res=300)
+```
+
+```{r ger_max}
+mean_pred_ger <- calculation_ger %>% 
+  filter(mean_val > 0) %>% 
+  arrange(desc(mean_val)) %>%
+  slice (1:1) %>% 
+  dplyr::select(mean_val, lon, lat)
+  
+median_pred_ger <- calculation_ger %>% 
+  filter(median_val > 0) %>% 
+  arrange(desc(median_val)) %>%
+  slice (1:1) %>% 
+  dplyr::select(median_val, lon, lat) 
+```
+
+## Austria
+
+```{r aus_kriging}
+# get data for strings
+kriged_values_aus <- kriged_aus %>% select(c("lon", "lat"))
+for (cname in strings) {
+  if (cname %in% colnames(kriged_aus)) {
+    kriged_values_aus[, paste0(cname)] <- as.numeric(unlist(kriged_aus[, cname]))
+  }
+}
+
+# create new list of column names for further operations
+strings <- toString(colnames(kriged_values_aus[3:ncol(kriged_values_aus)]))
+strings <- trimws(unlist(strsplit(strings, ",")))
+
+data_for_calculations_aus <- kriged_values_aus %>% select(-lon, -lat)
+calculation_aus <- kriged_values_aus %>% select(lon, lat)
+calculation_aus$mean_val <- rowMeans(data_for_calculations_aus)
+calculation_aus$median_val <- apply(data_for_calculations_aus, 1, median)
+calculation_aus$sd_val <- apply(data_for_calculations_aus, 1, sd)
+  
+calculation_aus_sf <- st_as_sf(calculation_aus, coords = c("lon", "lat"), crs = crs2)
+
+# get max
+mean_pred_aus <- calculation_aus %>% 
+  filter(mean_val > 0) %>% 
+  arrange(desc(mean_val)) %>%
+  slice (1:1) %>% 
+  dplyr::select(mean_val, lon, lat)
+
+median_pred_aus <- calculation_aus %>% 
+  filter(median_val > 0) %>% 
+  arrange(desc(median_val)) %>%
+  slice (1:1) %>% 
+  dplyr::select(median_val, lon, lat)
+
+# Variogram
+data_aus <- calculation_aus["mean_val"]
+coords_aus <- calculation_aus[c("lon", "lat")]
+spdf_aus <- SpatialPointsDataFrame(coords      = coords_aus,
+                               data        = data_aus, 
+                               proj4string = crs3)
+spdf_aus = spdf_aus[which(!duplicated(spdf_aus@coords)), ]
+vg_aus <- variogram(mean_val~1, data = spdf_aus, width = 1, cutoff = 300)
+vg_fit_aus <- fit.variogram(vg_aus, vgm("Exp")) 
+
+# Kriging
+krig_aus <- krige(mean_val~1, 
+               locations = spdf_aus, 
+               newdata = sp_grid_aus_sf, 
+               model = vg_fit_aus)
+```
+
+```{r state_pred_aus}
+# Get point from output above
+max_point1 <- mean_pred_aus
+
+check_state_aus <- function(max_point) {
+  max_point2 <- data.frame(
+    longitude = c(max_point$lon),
+    latitude = c(max_point$lat)) 
+  point_sf <- st_as_sf(max_point2, coords = c("longitude", "latitude"), crs = st_crs(aus_states_plot))
+  
+  # Check if the point is within any state
+  point_within_state <- st_contains(aus_states_plot, point_sf, sparse = FALSE)
+  
+  # Check which state the point is within (if any)
+  state_index <- which(point_within_state, arr.ind = TRUE)
+  state_in <- ifelse(length(state_index) > 0, aus_states$name[state_index[1]], "Outside any state")
+  
+  print(state_in)
+}
+
+# run it
+state_result <- check_state_aus(max_point1)
+print(state_result)
+```
+
+
+```{r aus_map}
+legend_max_aus <- round(max(krig_aus$var1.pred), digits = 2)
+legend_min_aus <- round(min(krig_aus$var1.pred), digits = 2) 
+
+ggplot() +
+    geom_sf(data = krig_aus, aes(fill=var1.pred), shape = 21, size = 0.75, stroke = 0, lwd = 0) +
+    geom_sf(data = aus_plot, aes(geometry = geometry), color="black", fill=NA, size = 0.5) +
+    geom_sf_text(data = cities_aus_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, family = "Optima") +
+    geom_sf(data = cities_aus_sf, aes(geometry = geometry), shape = 4) +
+    theme_minimal() +
+    scale_fill_steps(low="#ffffff", high="#310d59", n.breaks = 20, labels = NULL) +
+    theme(axis.title.x = element_blank(), 
+          axis.title.y = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          panel.grid.major = element_blank()) +
+    theme(legend.position = c(0.12, 0.85), 
+          legend.title = element_text(size = 8, family = "Optima"), 
+          legend.text = element_text(size = 6, family = "Optima", hjust = 1),
+          legend.title.align = 0,
+          legend.key.size = unit(0.3, "cm"),
+          legend.key.width = unit(0.4,"cm")) +
+  ggplot2::annotate(geom="text", x = 10.6, y = 49.05, label=legend_max_aus, size = 1.5, family = "Optima") +
+  ggplot2::annotate(geom="text", x = 10.6, y = 48.2, label=legend_min_aus, size = 1.5, family = "Optima") +
+    labs(fill = " ")
+
+#tiff("adios.jpg", units="in", width=3.5, height=2, res=300)
+```
+
+```{r aus_max}
+mean_pred_aus <- calculation_aus %>% 
+  filter(mean_val > 0) %>% 
+  arrange(desc(mean_val)) %>%
+  slice (1:1) %>% 
+  dplyr::select(mean_val, lon, lat)
+  
+median_pred_aus <- calculation_aus %>% 
+  filter(median_val > 0) %>% 
+  arrange(desc(median_val)) %>%
+  slice (1:1) %>% 
+  dplyr::select(median_val, lon, lat) 
+```
+
+## Switzerland
+
+```{r swi_kriging}
+# get data for strings
+kriged_values_swi <- kriged_swi %>% select(c("lon", "lat"))
+
+for (cname in strings) {
+  if (cname %in% colnames(kriged_swi)) {
+    kriged_values_swi[, paste0(cname)] <- as.numeric(unlist(kriged_swi[, cname]))
+  }
+}
+
+# create new list of column names for further operations
+strings <- toString(colnames(kriged_values_swi[3:ncol(kriged_values_swi)]))
+strings <- trimws(unlist(strsplit(strings, ",")))
+
+data_for_calculations_swi <- kriged_values_swi %>% select(-lon, -lat)
+calculation_swi <- kriged_values_swi %>% select(lon, lat)
+calculation_swi$mean_val <- rowMeans(data_for_calculations_swi)
+calculation_swi$median_val <- apply(data_for_calculations_swi, 1, median)
+calculation_swi$sd_val <- apply(data_for_calculations_swi, 1, sd)
+  
+calculation_swi <- data.frame(calculation_swi, sign_mean = sign(calculation_swi$mean_val))
+calculation_swi <- data.frame(calculation_swi, sign_median = sign(calculation_swi$median_val))
+
+calculation_swi_sf <- st_as_sf(calculation_swi, coords = c("lon", "lat"), crs = crs2)
+
+# get max
+mean_pred_swi <- calculation_swi %>% 
+  filter(mean_val > 0) %>% 
+  arrange(desc(mean_val)) %>%
+  slice (1:1) %>% 
+  dplyr::select(mean_val, lon, lat)
+  
+median_pred_swi <- calculation_swi %>% 
+  filter(median_val > 0) %>% 
+  arrange(desc(median_val)) %>%
+  slice (1:1) %>% 
+  dplyr::select(median_val, lon, lat) 
+
+# Variogram
+data_swi <- calculation_swi["mean_val"]
+coords_swi <- calculation_swi[c("lon", "lat")]
+spdf_swi <- SpatialPointsDataFrame(coords      = coords_swi,
+                               data        = data_swi, 
+                               proj4string = crs3)
+spdf_swi = spdf_swi[which(!duplicated(spdf_swi@coords)), ]
+vg_swi <- variogram(mean_val~1, data = spdf_swi, width = 1, cutoff = 300)
+vg_fit_swi <- fit.variogram(vg_swi, vgm("Exp")) 
+
+# Kriging
+krig_swi <- krige(mean_val~1, 
+               locations = spdf_swi, 
+               newdata = sp_grid_swi_sf, 
+               model = vg_fit_swi)
+```
+
+```{r state_pred_swi}
+# Get point from output above
+max_point1 <- mean_pred_swi
+
+check_state_swi <- function(max_point) {
+  max_point2 <- data.frame(
+    longitude = c(max_point$lon),
+    latitude = c(max_point$lat)) 
+  point_sf <- st_as_sf(max_point2, coords = c("longitude", "latitude"), crs = st_crs(swi_states_plot))
+  
+  # Check if the point is within any state
+  point_within_state <- st_contains(swi_states_plot, point_sf, sparse = FALSE)
+  
+  # Check which state the point is within (if any)
+  state_index <- which(point_within_state, arr.ind = TRUE)
+  state_in <- ifelse(length(state_index) > 0, swi_states$name[state_index[1]], "Outside any state")
+  
+  print(state_in)
+}
+
+# run it
+state_result <- check_state_swi(max_point1)
+print(state_result)
+```
+
+```{r swi_map}
+legend_max_swi <- round(max(krig_swi$var1.pred), digits = 2)
+legend_min_swi <- round(min(krig_swi$var1.pred), digits = 2) 
+
+ggplot() +
+    geom_sf(data = krig_swi, aes(fill=var1.pred), shape = 21, size = 0.75, stroke = 0, lwd = 0) +
+    geom_sf(data = swi_plot, aes(geometry = geometry), color="black", fill=NA, size = 0.5) +
+    geom_sf_text(data = cities_swi_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, family = "Optima") +
+    geom_sf(data = cities_swi_sf, aes(geometry = geometry), shape = 4) +
+    theme_minimal() +
+    scale_fill_steps(low="#ffffff", high="#310d59", n.breaks = 20, labels = NULL) +
+    theme(axis.title.x = element_blank(), 
+          axis.title.y = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          panel.grid.major = element_blank()) +
+    theme(legend.position = c(-0.02, 0.8), 
+          legend.title = element_text(size = 6, family = "Optima"), 
+          legend.text = element_text(size = 6, family = "Optima", hjust = 1),
+          legend.title.align = 0,
+          legend.key.size = unit(0.3, "cm"),
+          legend.key.width = unit(0.4,"cm")) +
+    ggplot2::annotate(geom="text", x = 5.95, y = 47.7, label=legend_max_swi, size = 1.5, family = "Optima") +
+    ggplot2::annotate(geom="text", x = 5.95, y = 47.1, label=legend_min_swi, size = 1.5, family = "Optima") +
+    labs(fill = " ")
+
+# jpeg("adios3.jpg", units="in", width=3.5, height=2, res=300)
+```
+
+```{r swi_max}
+mean_pred_swi <- calculation_swi %>% 
+  filter(mean_val > 0) %>% 
+  arrange(desc(mean_val)) %>%
+  slice (1:1) %>% 
+  dplyr::select(mean_val, lon, lat)
+  
+median_pred_swi <- calculation_swi %>% 
+  filter(median_val > 0) %>% 
+  arrange(desc(median_val)) %>%
+  slice (1:1) %>% 
+  dplyr::select(median_val, lon, lat) 
+```
+
+
+
+
+
+
+
+
+
+
+### some old code as backup
+
+```{r old}
+  #calculation <- data.frame(calculation, sign_mean = sign(calculation$mean_val))
+  #calculation <- data.frame(calculation, sign_median = sign(calculation$median_val))
+
+    #kriged_data <- merge(x = kriged_data, y = krig3[ , 3], by.x = "geometry", by.y = "geometry", all.x=TRUE)
+    #kriged_data <- st_join(kriged_data, krig3)
+    #https://r-spatial.github.io/sf/reference/st_join.html
+    #combined <- kriged_data %>% st_join(krig3)
+#krig3_notsf <- dplyr::select(krig3_notsf, qword, "x", "y")
+
+write.csv(calculation,"log_ransom_calculation.csv", row.names = FALSE)
+write.csv(morans_calc,"new_ransom_all_morans.csv", row.names = FALSE)
+
+calculation_ger <- data.frame(calculation_ger, sign_mean = sign(calculation_ger$mean_val))
+calculation_ger <- data.frame(calculation_ger, sign_median = sign(calculation_ger$median_val))
+```

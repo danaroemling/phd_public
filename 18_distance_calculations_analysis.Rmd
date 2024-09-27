@@ -1,0 +1,374 @@
+---
+title: "Distance Calculations"
+author: "Dana Roemling"
+date: "2024-09-03"
+output: html_document
+toc: true
+toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Distances
+
+For analysis I need to be able to easily compute distances between points.
+
+In this rmd:
+1. Setup
+2. "Manual" distances
+3. Getting max points from averaged strings
+4. Distance matrix from max points
+5. Distance matrix from max points + location
+6. Average distance
+
+7. Base map for word
+8. Kriged map for word (large grid)
+
+9. Sampling from dev corpus
+10. Hotspot for each word from sample
+11. Compare hotspot and original location
+
+
+```{r setup}
+library(geosphere) # outputs meters, based on WGS84 
+# https://cran.r-project.org/web/packages/geosphere/geosphere.pdf
+library(dplyr)
+library(spdep)
+library(sf)
+library(sp)
+library(tidyverse)
+library(gstat)
+library(stringr) 
+library(scales)
+library(classInt)
+library(viridis)
+library(viridisLite)
+library(rnaturalearth)
+library(rnaturalearthhires)
+library(rlang)
+library(sfheaders)
+library(splitstackshape)
+
+backup_options <- options()
+options(backup_options)
+options("scipen"=100, "digits"=2)
+
+# data
+kriged_all <- read.csv(file = 
+                           'data_ling/kriged/kriged_10k_300cutoff.csv', 
+                         header = TRUE) 
+names(kriged_all) <- gsub("\\.", "", names(kriged_all))
+names(kriged_all) <- gsub("\\<X", "", names(kriged_all))
+corpus <- kriged_all
+kriged_all <- kriged_all %>% dplyr::select(1:2002)  
+
+word_frequency <- read.csv(file = '/Users/dana/Documents/R/PHD/data_ling/ordered_top_words.csv')
+
+# for 70% of data relative frequency of word given sucorpus location
+matrix_freq <- read.csv(file = './data_ling/matrix_cities_x_variables_rel_freq_countries.csv') 
+
+longlat <- read.csv(file = 'data_maps/gsa_geo_filtered.csv')
+cities <- data.frame(
+  City = c("Köln", "München", "Wien", "Zürich", "Berlin", "Hamburg"),
+  Long = c(6.9578, 11.5755, 16.3731, 8.5417, 13.3833, 10),
+  Lat = c(50.9422, 48.1372, 48.2083, 47.3769, 52.5167, 53.55))
+crs2 <- CRS("+init=epsg:4326")
+cities_sf <- st_as_sf(cities, coords = c("Long", "Lat"), crs = crs2)
+gsa_outline <- ne_countries(country = c("Austria", "Germany", "Switzerland"), returnclass="sf", scale = "large")
+gsa_plot <- gsa_outline %>% dplyr::select(geometry) # just the outlines of the three
+gsa_spatial <- as_Spatial(gsa_plot) # new object as spatial instead of sf
+sp_grid <- as.data.frame(spsample(gsa_spatial,
+                                  n = 100000,
+                                  type = "regular", # systematically aligned sampling
+                                  offset = c(0.5,0.5))) # makes sure grid is the same every time
+sp_grid_sf <- st_as_sf(sp_grid, coords=c("x1","x2"), crs = st_crs(4326))
+
+
+strings <- tolower(c("aber", "eigentlich", "isses", "mir", "echt", "egal", "bin", "auch", "offen", "für", "kreative", "sachen"))
+strings <- unique(strings)
+```
+
+I can calculate stuff "by hand", this is the basic code:
+
+```{r manual}
+# function takes long first, then lat!!
+output <- (distm(c(14.0508704, 51.9258955), c(6.565208, 51.3345409), fun = distGeo))/1000
+
+# or with df
+df <- data.frame(
+  lon = c(12.9208547, 7.77125978, 9.86446333, 9.16672881, 10.5621978, 8.4689943, 7.07352527, 8.81786156,
+          11.9576669, 11.6087996, 12.3065341, 11.9576669, 16.144074),
+  lat = c(50.8282222, 49.1349574, 46.6928866, 47.0417539, 48.0883557, 50.1815592, 46.6928866, 54.3679663,
+          50.8792937, 47.7394884, 52.9724973, 50.8792937, 47.3906211))
+
+df <- rbind(c(12.6554014, 52.2747627),
+            c(11.9576669, 50.8792937),
+            c(12.65540144,	52.2747627),
+            c(13.7020032,	52.62363))
+
+output2 <- (distm(df))/1000 
+output3 <- output2[,1] %>% as_tibble()
+```
+
+I can also do a comparison for multiple points by getting the max values through a function. 
+In the first case here, the function gets the n max values for the mean of all strings based on the 500 grid kriged values.
+
+```{r max_points}
+max_points <- function(strings, n) {
+  kriged_values <- kriged_all %>% 
+    select(c("lon", "lat"))
+  
+  for (cname in strings) {
+    if (cname %in% colnames(kriged_all)) {
+      kriged_values[, paste0(cname)] <- as.numeric(unlist(kriged_all[, cname]))
+    }
+  }
+  
+  data_for_calculations <- kriged_values %>% 
+    select(-lon, -lat)
+  calculation <- kriged_values %>% 
+    select(lon, lat)
+  calculation$mean_val <- rowMeans(data_for_calculations)
+  calculation$median_val <- apply(data_for_calculations, 1, median)
+  calculation$sd_val <- apply(data_for_calculations, 1, sd)
+  
+  # get max
+  mean_pred <- calculation %>% 
+    filter(mean_val > 0) %>% 
+    arrange(desc(mean_val)) %>%
+    slice (1:n) %>% 
+    dplyr::select(mean_val, lon, lat)
+  
+  # return results
+  return(mean_pred)
+}
+
+results_mean <- max_points(strings, 10)
+```
+
+For these max points I can then compute the distances. 
+
+```{r distm1}
+# written to take the mean_pred as input 
+dist_matrix <- function(df) {
+  temp <- df %>% dplyr::select(lon, lat)
+  output <- (distm(temp))/1000
+  output2 <- output[,1] %>% as_tibble()
+  
+  return(output)
+}
+
+matrix_mean <- dist_matrix(results_mean)
+```
+
+I can also add a city/location and compare to the max points.
+
+```{r distm2}
+# written to take the mean_pred as input 
+dist_matrix_comp <- function(df, location) {
+  temp_coord1 <- longlat %>% filter(City == location) %>% dplyr::select(lon, lat)
+  temp_coord2 <- df %>% dplyr::select(lon, lat)
+  temp_coord3 <- rbind(temp_coord1, temp_coord2)
+  output <- (distm(temp_coord3))/1000
+  output2 <- output[,1] %>% as_tibble()
+  
+  return(output)
+}
+
+# city is V1 in the output
+matrix_comp <- dist_matrix_comp(results_mean, "Aachen")
+```
+
+If I need the average distance to a point, I can also compute this.
+Note that this is not balanced or weighted, so points in the center of the GSA will perform better automatically. 
+
+```{r ave_dist}
+calculate_ave_distance <- function(distance_matrix) {
+  upper_triangle <- distance_matrix[upper.tri(distance_matrix)]
+  average_distance <- mean(upper_triangle)
+  
+  return(average_distance)
+}
+
+mean_dist <- calculate_ave_distance(matrix_comp)
+```
+
+## Map function
+
+To get a basic map of one word, this is the function:
+The map is based on the 500 grid and the kriged data read in above (top 2000 usually).
+
+```{r basemap}
+get_map <- function(instance) {
+  temp <- corpus %>% dplyr::select(instance, lon, lat) %>%
+    st_as_sf(coords = c("lon", "lat"), crs = 4326)
+  max_value <- max(temp[[instance]], na.rm = TRUE)
+  min_value <- min(temp[[instance]], na.rm = TRUE)
+  legend_max <- round(max_value, digits = 3)
+  legend_min <- round(min_value, digits = 3)
+  ggplot() +
+    geom_sf(data = temp, aes(geometry = geometry, fill = as.numeric(!!rlang::sym(instance))), shape = 21, size = 3, stroke = 0, lwd = 0) +
+    geom_sf(data = gsa_plot, aes(geometry = geometry), color="black", fill=NA, size = 0.5) +
+    geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, family = "Optima") +
+    geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4) +
+    theme_minimal() +
+    scale_fill_steps(low="#ffffff", high="#310d59", n.breaks = 30, labels = NULL) +
+    theme(axis.title.x = element_blank(), 
+          axis.title.y = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          panel.grid.major = element_blank()) +
+    theme(legend.position = c(0.90, 0.65), 
+          legend.title = element_text(size = 8, family = "Optima"), 
+          legend.text = element_text(size = 6, family = "Optima", hjust = 1),
+          legend.title.align = 0,
+          legend.key.size = unit(0.3, "cm"),
+          legend.key.width = unit(0.4,"cm")) +
+    labs(fill = instance) +
+    annotate(geom="text", x = 17.05, y = 52.35, label=legend_max, size = 1.5, family = "Optima") +
+    annotate(geom="text", x = 17.05, y = 51.25, label=legend_min, size = 1.5, family = "Optima") 
+}
+
+get_map("hallo")
+```
+
+If I want to clean the map up and interpolate to the large grid, the below code will do that.
+
+```{r kriged_map}
+get_kriged_map <- function(instance) {
+  instance_sym <- sym(instance)
+  temp <- corpus %>% dplyr::select(!!instance_sym, lon, lat)
+  
+  data <- temp %>% select(!!instance_sym)
+  coords <- temp %>% select(lon, lat)
+  crs <- CRS("+init=epsg:4326") 
+  spdf <- SpatialPointsDataFrame(coords      = coords,
+                                 data        = data, 
+                                 proj4string = crs)
+  spdf = spdf[which(!duplicated(spdf@coords)), ]
+  
+  instance_formula <- as.formula(paste(instance, "~ 1"))
+  vg <- variogram(instance_formula, data = spdf, width = 1, cutoff = 300)
+  vg_fit <- fit.variogram(vg, vgm("Exp")) 
+  kriged <- krige(instance_formula, 
+                  locations = spdf, 
+                  newdata = sp_grid_sf, 
+                  model = vg_fit) 
+  legend_max <- round(max(kriged$var1.pred), digits = 3)
+  legend_min <- round(min(kriged$var1.pred), digits = 3)
+  kriged_sf <- st_as_sf(kriged)
+  
+  ggplot() +
+    geom_sf(data = kriged_sf, aes(fill = var1.pred), shape = 21, size = 0.75, stroke = 0, lwd = 0) +
+    geom_sf(data = gsa_plot, aes(geometry = geometry), color="black", fill=NA, size = 0.5) +
+    geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, family = "Optima") +
+    geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4) +
+    theme_minimal() +
+    scale_fill_steps(low="#ffffff", high="#310d59", n.breaks = 30, labels = NULL) +
+    theme(axis.title.x = element_blank(), 
+          axis.title.y = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          panel.grid.major = element_blank()) +
+    theme(legend.position = c(0.90, 0.65), 
+          legend.title = element_text(size = 8, family = "Optima"), 
+          legend.text = element_text(size = 6, family = "Optima", hjust = 1),
+          legend.title.align = 0,
+          legend.key.size = unit(0.3, "cm"),
+          legend.key.width = unit(0.4,"cm")) +
+    annotate(geom="text", x = 17.05, y = 52.35, label=legend_max, size = 1.5, family = "Optima") +
+    annotate(geom="text", x = 17.05, y = 51.25, label=legend_min, size = 1.5, family = "Optima") +
+    labs(fill = instance)
+}
+
+
+get_kriged_map("hund")
+```
+
+
+
+```{r sampling}
+dev_corpus <- read.csv(file = '/Users/dana/Documents/R/PHD/data_ling/Test_30_Data/testing_15.csv', header = TRUE) 
+dev_corpus_filtered <- dev_corpus %>% dplyr::filter(location != "far")
+
+# this samples 100 messages - not yet tokenised
+sample_hundred <- dplyr::sample_n(dev_corpus_filtered, 125)
+sample_hundred <- merge(sample_hundred, longlat, by.x ="location", by.y = "City")
+sample_hundred <- sample_hundred[1:100,]
+write.csv(sample_hundred,"sample.csv", row.names = FALSE, fileEncoding = "UTF-8")
+
+# split by the usual whitespace, then remove empty cells
+sample_tokenised <- cSplit(sample_hundred, "message", "\\W", direction = "long", fixed = FALSE, stripWhite = TRUE)
+sample_tokenised <- sample_tokenised[!(sample_tokenised$message == ""), ]
+```
+
+```{r sample_analysis1}
+# find the max for each word in the sample, get lon & lat for the max
+results <- data.frame(word = character(),
+                      lon = numeric(),
+                      lat = numeric(),
+                      max_value = numeric(),
+                      original_location = character(),
+                      post_id = character(),
+                      stringsAsFactors = FALSE)
+
+# need this for string and not sample? 
+# this is also in 16 as max_val_per_word
+#kriged_values <- kriged_all %>% select(c("lon", "lat"))
+#for (cname in strings) {
+#  if (cname %in% colnames(kriged_all)) {
+#  kriged_values[, paste0(cname)] <- as.numeric(unlist(kriged_all[, cname]))
+#  }
+#}
+#sample_tokenised <- kriged_values
+
+for (i in 1:nrow(sample_tokenised)) {
+  instance <- sample_tokenised$message[i]
+  
+  if (instance %in% colnames(corpus)) {
+    
+    max_value <- max(corpus[[instance]], na.rm = TRUE)
+    
+    max_index <- which.max(corpus[[instance]])
+    lon <- corpus$lon[max_index]
+    lat <- corpus$lat[max_index]
+    
+    post <- sample_tokenised$post_id[i]
+    
+    original_location <- sample_tokenised$location[i]
+    
+    new_row <- data.frame(word = instance,
+                          lon = lon,
+                          lat = lat,
+                          max_value = max_value,
+                          original_location = original_location,
+                          post_id = post,
+                          stringsAsFactors = FALSE)
+    
+    results <- rbind(results, new_row)
+  }
+}
+```
+
+```{r sample_analysis2}
+# compare hotspot to original location
+longlat_2 <- longlat
+colnames(longlat_2) <- c("City", "original_lon", "original_lat")
+results <- merge(results, longlat_2, by.x ="original_location", by.y = "City")
+
+calculate_distance <- function(row) {
+  original_coords <- c(as.numeric(row["original_lon"]), as.numeric(row["original_lat"]))
+  max_coords <- c(as.numeric(row["lon"]), as.numeric(row["lat"]))
+  distm(original_coords, max_coords, fun = distGeo)
+}
+
+results$distance <- apply(results, 1, calculate_distance)
+results$distance_km <- results$distance / 1000
+
+results_ordered <- results %>%
+  arrange(distance_km)
+
+write.csv(results_ordered,"distances.csv", row.names = FALSE, fileEncoding = "UTF-8")
+```

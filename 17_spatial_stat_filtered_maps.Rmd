@@ -1,0 +1,323 @@
+---
+title: "Spatial Stat Filtered Maps"
+author: "Dana Roemling"
+date: '2024-01-22'
+output: html_document
+toc: true
+toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Spatial Stat Filtered Maps
+
+This markdown reflects the work that I have been doing since the first theoretically grounded analysis of the 50 messages from the test data. In that analysis, I have seen how unweighted maps, based on both mean and median, perform in predicting the location of a post. I saw that mainly the country assignment was correct. In the cultural regions analysis I have also seen that it is very helpful to first filter by country. So in this document, I will filter the data by country, so that any subsequent mapping is not influenced by noise from the other countries. 
+
+So the steps for prediction are: 
+1. Initial prediction based on the small grid kriged values with all countries in it. This will give me a country code prediction. 
+2. Filtering the data based on this prediction and then redoing the prediction with a country-specific data set. 
+3. A type of weighting of the features that go into the second prediction. 
+
+Steps 1. and 2. are in RMD 16. Run those first (don't double code.)
+
+
+## Filtering by Regionalism Score
+
+Calculate Moran's I (but based on original, not kriged values).
+
+```{r morans_i}
+# get unkriged values for Moran's I
+matrix <- read.csv(file = 
+                     '/Users/dana/Documents/R/PHD/data_ling/10k_matrix_geo.csv', 
+                   header = TRUE) 
+names(matrix) <- gsub("\\.", "", names(matrix))
+names(matrix) <- gsub("\\<X", "", names(matrix))
+
+matrix_values <- matrix %>% select(c("lon", "lat"))
+for (cname in strings) {
+  if (cname %in% colnames(matrix)) {
+    matrix_values[, paste0(cname)] <- as.numeric(unlist(matrix[, cname]))
+  }
+}
+
+matrix_values[is.na(matrix_values)] <- 0
+morans_matrix <- matrix_values
+morans_coord <- as.matrix(data.frame(LONG = matrix_values$lon, LAT = matrix_values$lat))
+neighbours <- knn2nb(knearneigh(morans_coord, k=10, longlat=TRUE))
+neighbours <- include.self(neighbours)
+neighbours_weighted <- nb2listw(neighbours, style="W", zero.policy=TRUE)
+
+#options(scipen=999)
+morans_df <- data.frame(matrix(ncol = 6, nrow = 0))
+colnames(morans_df) <- c("word", "I", "p","expectation", "variance", "stdev")
+
+# first are lon / lat, so start after those
+for (cname in 2:ncol(morans_matrix))
+{
+  print(round(100*cname/ncol(morans_matrix),2))
+  mtemp <- moran.test(morans_matrix[,cname], neighbours_weighted, rand=TRUE, rank=FALSE, alternative="greater")	
+  morans_df[cname-2,"word"] <- colnames(morans_matrix[cname])
+  morans_df[cname-2,"I"] <- mtemp$estimate[1]
+  morans_df[cname-2,"p"] <- round(mtemp$p.value,10)
+  morans_df[cname-2,"expectation"] <- mtemp$estimate[2]
+  morans_df[cname-2,"variance"] <- mtemp$estimate[3]
+  morans_df[cname-2,"stdev"] <- mtemp$statistic
+}
+
+# prepare for loop
+rownames(morans_df) <- morans_df$word
+morans_df <- morans_df %>% drop_na()
+morans_df$inclusion <- NA
+
+# create threshold for inclusion
+for (cname in strings) {
+  temp_word <- cname
+  temp_value <- morans_df[cname,"I"]
+  morans_df[cname, "inclusion"] <- ifelse(abs(temp_value) > 0.12, 1, 0)
+}
+
+morans_filtered_df <- morans_df %>% filter(inclusion == 1)
+words_to_keep <- rownames(morans_filtered_df)
+
+kriged_initial <- read.csv(file = 
+                             '/Users/dana/Documents/R/PHD/data_ling/kriged/kriged_10k_300cutoff.csv', 
+                           header = TRUE) 
+names(kriged_initial) <- gsub("\\.", "", names(kriged_initial))
+names(kriged_initial) <- gsub("\\<X", "", names(kriged_initial))
+
+# decide how many top words
+#kriged_initial <- kriged_initial %>% dplyr::select(1:2002)
+
+result_df <- kriged_initial[, c("lon", "lat", words_to_keep)]
+```
+
+The results_df can now be used to average / aggregate the map as usual. The results dataframe is based on the small grid 500 locations with kriged values and extracts the lon, lat and relevant words that remain after filtering. 
+
+```{r morans_filtered_averaged_kriged}
+data_for_calculations <- result_df %>% select(-lon, -lat)
+calculation <- result_df %>% select(lon, lat)
+calculation$mean_val <- rowMeans(data_for_calculations)
+calculation$median_val <- apply(data_for_calculations, 1, median)
+calculation$sd_val <- apply(data_for_calculations, 1, sd)
+
+# get max
+mean_pred <- calculation %>% 
+  filter(mean_val > 0) %>% 
+  arrange(desc(mean_val)) %>%
+  slice (1:1) %>% 
+  dplyr::select(mean_val, lon, lat)
+
+# variogram
+data <- calculation["mean_val"]
+coords <- calculation[c("lon", "lat")]
+spdf <- SpatialPointsDataFrame(coords      = coords,
+                               data        = data, 
+                               proj4string = crs3)
+spdf = spdf[which(!duplicated(spdf@coords)), ]
+vg <- variogram(mean_val~1, data = spdf, width = 1, cutoff = 300)
+vg_fit <- fit.variogram(vg, vgm("Exp")) 
+
+# grid
+gsa_outline <- ne_countries(country = c("Austria", "Germany", "Switzerland"), returnclass="sf", scale = "large")
+gsa_plot <- gsa_outline %>% dplyr::select(geometry) 
+gsa_spatial <- as_Spatial(gsa_plot)
+sp_grid <- as.data.frame(spsample(gsa_spatial,
+                                  n = 100000,
+                                  type = "regular", # systematically aligned sampling
+                                  offset = c(0.5,0.5))) # makes sure grid is the same every time
+sp_grid_sf <- st_as_sf(sp_grid, coords=c("x1","x2"), crs = st_crs(4326))
+
+# Kriging
+krig <- krige(mean_val~1, 
+             locations = spdf, 
+             newdata = sp_grid_sf, 
+             model = vg_fit)
+```
+
+
+## Filtering for Getis Ord / Geary's C 
+
+Getis Ord z-scores are local spatial autocorrelation. That doesn't help me for filtering on a general map (or does it?). Seems useful to move to a global measure here. At least with this code that's possible. 
+I do have the getis ord in here, in case I need it. But essentially Geary's C doesn't need it. 
+
+
+```{r getis_ord}
+matrix <- read.csv(file = 
+                     '/Users/dana/Documents/R/PHD/data_ling/10k_matrix_geo.csv', 
+                   header = TRUE) 
+names(matrix) <- gsub("\\.", "", names(matrix))
+names(matrix) <- gsub("\\<X", "", names(matrix))
+
+matrix_values <- matrix %>% select(c("lon", "lat"))
+for (cname in strings) {
+  if (cname %in% colnames(matrix)) {
+    matrix_values[, paste0(cname)] <- as.numeric(unlist(matrix[, cname]))
+  }
+}
+
+
+# Getis Ord
+getis_ord <- matrix_values
+getis_coord <- as.matrix(data.frame(LONG = matrix_values$lon, LAT = matrix_values$lat))
+neighbours <- knn2nb(knearneigh(getis_coord, k=10, longlat=TRUE))
+neighbours <- include.self(neighbours)
+neighbours_weighted <- nb2listw(neighbours, style="W", zero.policy=TRUE)
+
+for (i in 2:ncol(matrix_values))
+{
+  temp <- localG(as.numeric(matrix_values[,i]), neighbours_weighted)
+  temp <- round(temp, 3)
+  getis_ord[,i] <- temp
+}
+
+
+# Geary's C
+geary_results <- lapply(matrix_values[, -c(1, 2)], function(word_freq) {
+  geary.test(word_freq, neighbours_weighted)
+})
+
+# Initialise an empty list to store results
+results_list <- list()
+
+# Loop through geary_results to extract relevant information
+for (i in 1:length(geary_results)) {
+  test_result <- geary_results[[i]]
+  word_name <- names(geary_results)[i]
+  
+  # Extract values
+  geary_c <- test_result$estimate["Geary C statistic"]
+  expectation <- test_result$estimate["Expectation"]
+  variance <- test_result$estimate["Variance"]
+  z_value <- test_result$statistic
+  p_value <- test_result$p.value
+  
+  # Check for missing values and skip if any are found
+  if (!is.na(geary_c) && !is.na(expectation) && !is.na(variance) && 
+      !is.na(z_value) && !is.na(p_value) && !is.na(word_name)) {
+    
+    # Store in a list
+    results_list[[i]] <- data.frame(
+      word = word_name,
+      geary_c = geary_c,
+      expectation = expectation,
+      variance = variance,
+      z_value = z_value,
+      p_value = p_value,
+      stringsAsFactors = FALSE
+    )
+  }
+}
+
+# Combine list into a single dataframe
+geary_df <- do.call(rbind, results_list)
+rownames(geary_df) <- NULL
+
+# filtering for geary's c
+threshold <- 0.2
+filtered_geary_df <- geary_df %>% filter(geary_c > threshold)
+selected_words <- filtered_geary_df$word
+kriged_columns <- colnames(kriged_initial)
+intersected_words <- intersect(selected_words, kriged_columns)
+
+result_df <- kriged_initial %>% dplyr::select(lon, lat, all_of(intersected_words))
+```
+
+```{r gearys_filtered_averaged_kriged}
+data_for_calculations <- result_df %>% select(-lon, -lat)
+calculation <- result_df %>% select(lon, lat)
+calculation$mean_val <- rowMeans(data_for_calculations)
+calculation$median_val <- apply(data_for_calculations, 1, median)
+calculation$sd_val <- apply(data_for_calculations, 1, sd)
+
+# get max
+mean_pred <- calculation %>% 
+  filter(mean_val > 0) %>% 
+  arrange(desc(mean_val)) %>%
+  slice (1:1) %>% 
+  dplyr::select(mean_val, lon, lat)
+
+# variogram
+data <- calculation["mean_val"]
+coords <- calculation[c("lon", "lat")]
+spdf <- SpatialPointsDataFrame(coords      = coords,
+                               data        = data, 
+                               proj4string = crs3)
+spdf = spdf[which(!duplicated(spdf@coords)), ]
+vg <- variogram(mean_val~1, data = spdf, width = 1, cutoff = 300)
+vg_fit <- fit.variogram(vg, vgm("Exp")) 
+
+# grid
+gsa_outline <- ne_countries(country = c("Austria", "Germany", "Switzerland"), returnclass="sf", scale = "large")
+gsa_plot <- gsa_outline %>% dplyr::select(geometry) 
+gsa_spatial <- as_Spatial(gsa_plot)
+sp_grid <- as.data.frame(spsample(gsa_spatial,
+                                  n = 100000,
+                                  type = "regular", # systematically aligned sampling
+                                  offset = c(0.5,0.5))) # makes sure grid is the same every time
+sp_grid_sf <- st_as_sf(sp_grid, coords=c("x1","x2"), crs = st_crs(4326))
+
+# Kriging
+krig <- krige(mean_val~1, 
+             locations = spdf, 
+             newdata = sp_grid_sf, 
+             model = vg_fit)
+```
+
+
+
+
+```{r just_average_no_filter}
+kriged_values <- kriged_all %>% select(c("lon", "lat"))
+  
+for (cname in strings) {
+  if (cname %in% colnames(kriged_all)) {
+  kriged_values[, paste0(cname)] <- as.numeric(unlist(kriged_all[, cname]))
+  }
+}
+
+data_for_calculations <- kriged_values %>% select(-lon, -lat)
+calculation <- kriged_values %>% select(lon, lat)
+calculation$mean_val <- rowMeans(data_for_calculations)
+calculation$median_val <- apply(data_for_calculations, 1, median)
+calculation$sd_val <- apply(data_for_calculations, 1, sd)
+
+# get max
+mean_pred <- calculation %>% 
+  filter(mean_val > 0) %>% 
+  arrange(desc(mean_val)) %>%
+  slice (1:1) %>% 
+  dplyr::select(mean_val, lon, lat)
+
+# variogram
+data <- calculation["mean_val"]
+coords <- calculation[c("lon", "lat")]
+spdf <- SpatialPointsDataFrame(coords      = coords,
+                               data        = data, 
+                               proj4string = crs3)
+spdf = spdf[which(!duplicated(spdf@coords)), ]
+vg <- variogram(mean_val~1, data = spdf, width = 1, cutoff = 300)
+vg_fit <- fit.variogram(vg, vgm("Exp")) 
+
+gsa_outline <- ne_countries(country = c("Austria", "Germany", "Switzerland"), returnclass="sf", scale = "large")
+gsa_plot <- gsa_outline %>% dplyr::select(geometry) 
+gsa_spatial <- as_Spatial(gsa_plot)
+sp_grid <- as.data.frame(spsample(gsa_spatial,
+                                  n = 100000,
+                                  type = "regular", # systematically aligned sampling
+                                  offset = c(0.5,0.5))) # makes sure grid is the same every time
+sp_grid_sf <- st_as_sf(sp_grid, coords=c("x1","x2"), crs = st_crs(4326))
+
+# Kriging
+krig <- krige(mean_val~1, 
+             locations = spdf, 
+             newdata = sp_grid_sf, 
+             model = vg_fit)
+```
+
+
+
+
+
+
