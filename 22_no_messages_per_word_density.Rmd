@@ -1,0 +1,175 @@
+---
+title: "Amount Messages Per Word"
+author: "Dana Roemling"
+date: "2024-10-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Density
+
+In order to understand how many messages a word occurs in and with that to understand the coverage of words throughout the corpus, this RMD gets the stats for it. 
+
+
+```{r setup}
+# libs
+library(dplyr)    # Load the dplyr package for data manipulation (part of the tidyverse)
+library(tidytext) # Load the tidytext package for text mining (useful for tokenizing text)
+
+# data
+# Load the word frequency data from a CSV file into a dataframe called word_frequencies
+word_frequencies <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/frequency_df.csv')
+
+# Clean the column names of the word_frequencies dataframe:
+# 1. Remove any periods (".") in the column names.
+names(word_frequencies) <- gsub("\\.", 
+                                "", 
+                                names(word_frequencies))
+
+# 2. Remove any occurrences of "X" at the beginning of the column names (common with certain CSV formats).
+names(word_frequencies) <- gsub("\\<X", 
+                                "", 
+                                names(word_frequencies))
+
+# Load another word frequency dataset into a dataframe called word_frequency_df
+word_frequency_df <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/word_frequencies_bare_raw.csv')
+
+# Load the main corpus data (messages, post IDs, locations) from a CSV file into a dataframe called corpus
+corpus <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/train_70.csv')
+
+# Select only the relevant columns (message, post_id, and location) from the corpus and save it into corpus_small
+corpus_small <- corpus %>%
+  dplyr::select(message, 
+                post_id, 
+                location)
+
+# Load another CSV file containing a frequency matrix into matrix_freq.
+# This dataframe contains cities and relative word frequencies across Switzerland, Austria, and Germany.
+matrix_freq <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/matrix_cities_x_variables_rel_freq_countries.csv')
+
+# Select the relevant columns from matrix_freq, save it as city_list
+city_list <- matrix_freq %>% select(City, 
+                                    lon, 
+                                    lat, 
+                                    Switzerland, 
+                                    Austria, 
+                                    Germany)
+
+# Extract the city names from city_list into a vector called city_names
+city_names <- city_list$City
+
+# Load another CSV file that contains the top 10,000 most frequent words (max_onlies) into a dataframe called max_onlies
+max_onlies <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/max_onlies_10k.csv') 
+```
+
+Preparing the frequency counts first.
+This is based on the all locations and and top 10k words with raw frequency matrix.
+This is not used in the code down the line, but max_onlies is used - however the top 10k words should be the same anyway.
+
+```{r pressure}
+# Step 1: sum all columns that contain frequency data
+word_frequencies_summed <- colSums(word_frequencies[,3:ncol(word_frequencies)])
+
+# Step 2: Convert the named vector to a data frame
+word_frequency_df <- data.frame(
+  word = names(word_frequencies_summed),
+  frequency = word_frequencies_summed
+)
+
+# Step 3: Sort the data frame by frequency in descending order 
+word_frequency_df <- word_frequency_df %>%
+  arrange(desc(frequency))
+
+# View the top 10 most frequent words (optional)
+head(word_frequency_df, 10)
+
+# Save to a CSV file
+write.csv(word_frequency_df,
+          "/rds/projects/g/grievej-german-dialect-profiling/word_frequencies_bare_raw.csv", 
+          row.names = FALSE)
+```
+
+Now the actual work of calculating the density / coverage of each words given all messages in the corpus.
+
+```{r pressure}
+# Step 0: Filter coprus to only contain locations that are also used elsewhere
+# Although this is based on the train_70.csv, only locations within the GSA are kept
+# This location reduction ensures comparability across the code work
+# example of filtered train_70: creating the frequency matrix. 
+corpus_filtered <- corpus_small %>%
+  filter(location %in% city_list$City)
+corpus_filtered <- select(message,
+                          post_id)
+
+# Step 1: Tokenize the messages into individual words
+tokenized_corpus <- corpus_filtered %>%
+  unnest_tokens(word, message)
+
+# Export tokenised version
+# write.csv(tokenized_corpus,
+# "/rds/projects/g/grievej-german-dialect-profiling/corpus_tokenised_noloc.csv", 
+# row.names = FALSE)
+
+# Step 2: Count how many messages each word appears in
+message_word_count <- tokenized_corpus %>%
+  distinct(post_id, word) %>%  # Ensure each word is only counted once per message
+  count(word) %>%  # Count the number of unique messages for each word
+  rename(messages_with_word = n)  # Rename the column for clarity
+
+# Step 3: Calculate the total number of messages
+total_messages <- nrow(corpus)
+
+# Calculate the percentage of messages in which each word appears
+word_percentage <- message_word_count %>%
+  mutate(percentage = (messages_with_word / total_messages) * 100)
+
+# Change to non-scientific notation
+word_percentage$percentage <- format(word_percentage$percentage, 
+                                     scientific = FALSE)
+
+# View the results
+head(word_percentage)
+
+# filter for word to check counts
+one_word <- word_percentage %>%
+  dplyr::filter(word == "ich")
+
+# Export results
+write.csv(word_percentage, 
+          "/rds/projects/g/grievej-german-dialect-profiling/word_density_abdeckung.csv", 
+          row.names = FALSE)
+```
+
+As a last step the df is reordered.
+
+```{r reorder}
+# Step 1: Make sure max_onlies$word is a character vector (if it's not already)
+max_onlies_words <- as.character(max_onlies$word)
+
+# Step 2: Add a new column 'order' to 'word_percentage' by matching words
+# `mutate()` creates a new column called 'order'. 
+# The `match()` function checks where each word in `word_percentage$word` appears in the 'max_onlies_words' vector.
+# The result is the position of the word in 'max_onlies_words'. If a word is not found, it will get `NA`.
+word_percentage_new <- word_percentage %>%
+  mutate(order = match(word, 
+                       max_onlies_words))
+
+# Step 3: Reorder the dataframe based on the 'order' column
+word_percentage_ordered <- word_percentage_new %>%
+  arrange(order)  # Sorting by 'order' column
+
+# Step 4: Keep only the first 10,000 rows
+# `slice_head(n = 10000)` extracts the top 10,000 rows after ordering them. 
+# These will be the words that match the order from `max_onlies`, and only the top 10,000 are kept.
+words <- word_percentage_ordered %>%
+  slice_head(n = 10000)
+
+# Step 5: Save the resulting ordered list of words to a CSV file
+# Export the top 10,000 words to a CSV file. The `row.names = FALSE` option ensures that row numbers are not written to the file.
+write.csv(words, "/rds/projects/g/grievej-german-dialect-profiling/word_density_abdeckung_top10k.csv", row.names = FALSE)
+```
+
+

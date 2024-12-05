@@ -1,0 +1,185 @@
+---
+title: "Moran's I with different amount of base locations"
+author: "Dana Roemling"
+date: "2024-11-06"
+output: html_document
+toc: true
+toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Batch-Calculating Moran's I
+
+In this markdown I write up the code for the script that allows to calculate Moran's I for n number of words and m number of included base locations (cutoff points).
+This allows me to see when the regional signal is strongest and with least amount of noise. 
+
+
+```{r setup}
+# libraries
+library(dplyr)
+library(spdep)   # For Moran's I and spatial weights
+library(sf)      # For spatial data handling
+library(sp)      # coordinates function
+
+# data on HPC
+# regular full corpus
+corpus <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/full_matrix_for_filtering.csv') 
+# token count at locations
+token_at_location <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/tokens_at_location.csv')
+# renaming columns for clarity
+colnames(token_at_location) <- c("City", 
+                                 "Tokencount") 
+# longitude and latitde information
+longlat <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/gsa_geo_filtered.csv')
+# word frequency information
+word_freq <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/word_frequencies_bare_raw.csv')
+
+# creating a word list of HFW with just the word itself to iterate through
+wordlist <- word_freq %>%
+  top_n(5500, frequency) %>%
+  pull(word)
+```
+
+This is the first function, which takes a word and a cutoff point to then use the corpus, longlat information and the token_at_location details to produce a spatial weights matrix and then to calculate Moran's I. Knn is 10 at the minimum or based on the amount of underlying data. Otherwise results will be NA. 
+
+```{r first_function}
+# Function to compute Moran's I for a specific word and cutoff
+calculate_morans_I <- function(word, cutoff, corpus, longlat, token_at_location) {
+  
+  # Step 1: Filter top cities based on token count
+  top_cities <- token_at_location %>%
+    top_n(cutoff, 
+          Tokencount) %>%
+    select(City)
+  
+  # Filter corpus data for the specified word and top cities
+  word_data <- corpus %>%
+    filter(word == !!word, city %in% top_cities$City) %>%
+    inner_join(longlat, 
+               by = c("city" = "City"))
+  
+  # If fewer than two cities, Moran's I cannot be calculated
+  if (nrow(word_data) < 2) {
+    return(data.frame(word = word, cutoff = cutoff, morans_I = NA))
+  }
+  
+  # Step 2: Calculate spatial weights 
+  # Create a distance matrix 
+  longlat_variable <- word_data %>%
+    dplyr::select(lon, 
+                  lat)
+  
+  num_points <- nrow(longlat_variable)
+  k <- max(1, floor(num_points * 0.01))  # Use 1% of data points, with minimum 1
+  
+  # Handle cases where k is less than or equal to 0
+  if (k <= 0) {
+    return(data.frame(word = word, 
+                      cutoff = cutoff, 
+                      morans_I = NA))
+  }
+  
+  knn <- knn2nb(knearneigh(coordinates(longlat_variable), 
+                           k, 
+                           longlat = TRUE)) 
+  knn <- include.self(knn)
+  
+  # Ensure that the neighbors are valid
+  if (length(knn) == 0) {
+    return(data.frame(word = word, 
+                      cutoff = cutoff, 
+                      morans_I = NA))
+  }
+  weighted_knn <- nb2listw(knn, 
+                           style = "W", 
+                           zero.policy = TRUE)
+
+  # Step 3: Calculate Moran's I for the word frequency
+  morans_I_result <- moran(word_data$n, 
+                           weighted_knn, 
+                           length(knn), 
+                           Szero(weighted_knn))
+  
+  # Check if morans_I_result is valid
+  if (is.null(morans_I_result) || length(morans_I_result) == 0) {
+    return(data.frame(word = word, 
+                      cutoff = cutoff, 
+                      morans_I = NA))
+  }
+  
+  morans_I_value <- morans_I_result$I  # Adjust based on the structure of the output
+  
+  return(data.frame(word = word, 
+                    cutoff = cutoff, 
+                    morans_I = morans_I_value))
+  
+  # Extract Moran's I statistic
+  return(morans_I$estimate[1])
+}
+```
+
+```{r second_function}
+# Main function to loop through each word and cutoff
+calculate_morans_for_all <- function(wordlist, cutoffs, corpus, longlat, token_at_location) {
+  
+  # Initialize results list
+  results <- data.frame()
+  
+  for (word in wordlist) {
+    for (cutoff in cutoffs) {
+      morans_I_value <- calculate_morans_I(word, 
+                                           cutoff, 
+                                           corpus, 
+                                           longlat, 
+                                           token_at_location)
+      # Store result
+      results <- rbind(results, data.frame(word = word, 
+                                           cutoff = cutoff, 
+                                           morans_I = morans_I_value))
+    }
+  }
+  
+  return(results)
+}
+```
+
+```{r calling_functions}
+cutoffs <- c(100, 500, 1000, 2000, 3000, 5000, 8112)
+
+# Calculate Moran's I for each word at each cutoff
+morans_results <- calculate_morans_for_all(wordlist, cutoffs, corpus, longlat, token_at_location)
+
+# Save results
+write.csv(morans_results,"/rds/projects/g/grievej-german-dialect-profiling/moransi/third_attempt.csv", fileEncoding = "UTF-8", row.names = FALSE)
+```
+
+Pivot the resulting data for ease of comparison. 
+
+```{r clean_up_results}
+# read in the saved results
+combined_morans <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/moransi/third_attempt.csv') 
+
+# if these are several files, combine them
+# combined_morans <- bind_rows(morans1, morans2, morans3)
+
+# Remove the duplicated columns and rename moran's I value for clarity
+combined_morans <- combined_morans %>%
+  select(word, 
+         cutoff, 
+         morans_I.morans_I) %>%
+  rename(morans_I_value = morans_I.morans_I)
+
+# change the df to be based on words and cutoffs/inclusion numbers
+final_df <- combined_morans %>%
+  pivot_wider(names_from = word, 
+              values_from = morans_I_value)
+
+# export df
+write.csv(final_df, "/rds/projects/g/grievej-german-dialect-profiling/moransi/5k_moransi_7cutoffs.csv", fileEncoding = "UTF-8", row.names = FALSE)
+```
+
+
+

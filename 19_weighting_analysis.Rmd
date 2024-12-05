@@ -22,66 +22,148 @@ In this markdown:
 - Averaging relative frequency matrix
 - Weight strings by word distance
 - Weight strings by word frequency
+- Weight strings by word's moran's I
 - Extracting weighted n max points
 
 Remember: One of the issues is that the kriging locations and the city locations are not the same. So weighting from the matrix to kriged values is not trivial. But I can weight by an average of that word in question before the kriged values go into the calculation. 
 
 
 ```{r setup}
-#libraries
-library(geosphere)
-library(dplyr)
-library(spdep)
-library(sf)
-library(sp)
-library(tidyverse)
-library(gstat)
-library(stringr) 
-library(scales)
-library(classInt)
-library(viridis)
-library(viridisLite)
-library(rnaturalearth)
-library(rnaturalearthhires)
-library(rlang)
-library(sfheaders)
-library(splitstackshape)
+library(geosphere)      # For geographical calculations and distance measurements.
+library(dplyr)          # Data manipulation library (part of the tidyverse).
+library(spdep)          # Spatial dependence and autocorrelation analysis.
+library(sf)             # For working with spatial data in Simple Features format.
+library(sp)             # Spatial data manipulation, older version of sf.
+library(tidyverse)      # A collection of libraries, including dplyr and ggplot2, for data science.
+library(gstat)          # Geostatistics, used for kriging and spatial interpolation.
+library(stringr)        # String manipulation and regular expressions.
+library(scales)         # For scaling and formatting data in visualizations.
+library(classInt)       # Classification and intervals for continuous data.
+library(viridis)        # Color scales for visualization (colorblind-friendly).
+library(viridisLite)    # A lightweight version of viridis for color scales.
+library(rnaturalearth)  # For downloading natural earth map data.
+library(rnaturalearthhires) # High-resolution maps from Natural Earth data.
+library(rlang)          # For handling R programming language internals (e.g., expressions).
+library(sfheaders)      # Efficient handling of spatial data in sf objects.
+library(splitstackshape) # Efficiently splitting and reshaping data.
 
-# hpc files
+
+## HPC ##
 corpus <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/full_matrix_for_filtering.csv') 
+# Reading a corpus file that contains linguistic data.
+
 tokens <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/tokens_at_location.csv') 
+tokens <- read.csv(file = '/Users/dana/Documents/R/PHD/data_ling/tokens_at_location.csv') 
+# Reading a file of linguistic tokens at specific geographical locations.
+
 max_onlies <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/max_onlies_10k.csv') 
+# Reading a file that contains the most frequent occurrences of certain linguistic items.
+
 matrix_freq <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/matrix_cities_x_variables_rel_freq_countries.csv') 
+# Reading a file containing relative frequencies of linguistic variables across different cities.
+
 city_list <- matrix_freq %>% select(City, lon, lat, Switzerland, Austria, Germany)
+# Selecting columns for city name, longitude, latitude, and country affiliation from the frequency matrix.
+
 city_names <- city_list$City
+# Extracting a list of city names.
+
 word_names <- max_onlies$word
-kriged_all <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/kriged/kriged_10k_300cutoff.csv', header = TRUE) 
+# Extracting a list of words from the "max_onlies" data.
+
+kriged_all <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/kriged/kriged_10k_300cutoff.csv', header = TRUE)
+# Reading a dataset that contains the results of kriging (spatial interpolation method).
+
 names(kriged_all) <- gsub("\\.", "", names(kriged_all))
+# Removing dots from column names.
+
 names(kriged_all) <- gsub("\\<X", "", names(kriged_all))
+# Removing "X" from the beginning of column names.
+
 corpus <- kriged_all
+# Assigning the kriged data to the corpus object.
+
 kriged_all <- kriged_all %>% dplyr::select(1:2002)  
+# Selecting the first 2002 columns from the kriged data.
+
 distance_sorted <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/sorted_mean_distance_with_stats_df.csv')
+# Reading a file that contains sorted mean distances along with statistical data.
+
 distance_sorted <- distance_sorted %>% select(-X)
+# Dropping the column named "X" (usually an index or extraneous column).
 
 
-# local files
-frequency_matrix <- read.csv(file = '/Users/dana/Documents/R/PHD/data_ling/frequency_df.csv')
+
+## LOCAL ##
+frequency_matrix <- read.csv(file = '/Users/dana/Documents/R/PHD/data_ling/frequency/frequency_df.csv')
+# Reading a frequency matrix of linguistic data.
+
+names(frequency_matrix) <- gsub("\\.", "", names(frequency_matrix))
+# Removing dots from column names.
+
+names(frequency_matrix) <- gsub("\\<X", "", names(frequency_matrix))
+# Removing "X" from the beginning of column names.
+
 rel_frequency_matrix <- read.csv(file = '/Users/dana/Documents/R/PHD/data_ling/relative_frequency_df.csv')
-distance_matrix <- read.csv(file = '/Users/dana/Documents/R/PHD/data_ling/distance_matrix.csv')
-colnames(distance_matrix)[1] <- "city_loc"
-distances_ordered <- read.csv(file = '/Users/dana/Documents/R/PHD/data_ling/sorted_mean_distance_with_stats_df.csv')
-distances_ordered <- distances_ordered %>% select(-X)
-frequencies_ordered <- read.csv(file = '/Users/dana/Documents/R/PHD/data_ling/average_relative_frequency_sorted_df.csv')
-kriged_all <- read.csv(file = 
-                           'data_ling/kriged/kriged_10k_300cutoff.csv', 
-                         header = TRUE) 
-names(kriged_all) <- gsub("\\.", "", names(kriged_all))
-names(kriged_all) <- gsub("\\<X", "", names(kriged_all))
-corpus <- kriged_all
-kriged_all <- kriged_all %>% dplyr::select(1:2002)  
+# Reading a matrix of relative frequencies of linguistic data.
 
+names(rel_frequency_matrix) <- gsub("\\.", "", names(rel_frequency_matrix))
+# Removing dots from column names.
+
+names(rel_frequency_matrix) <- gsub("\\<X", "", names(rel_frequency_matrix))
+# Removing "X" from the beginning of column names.
+
+distance_matrix <- read.csv(file = '/Users/dana/Documents/R/PHD/data_ling/distance_matrix.csv')
+# Reading a distance matrix (likely distances between cities or linguistic distances).
+
+names(distance_matrix) <- gsub("\\.", "", names(distance_matrix))
+# Removing dots from column names.
+
+names(distance_matrix) <- gsub("\\<X", "", names(distance_matrix))
+# Removing "X" from the beginning of column names.
+
+colnames(distance_matrix)[1] <- "city_loc"
+# Renaming the first column to "city_loc" (city location).
+
+distances_ordered <- read.csv(file = '/Users/dana/Documents/R/PHD/data_ling/sorted_mean_distance_with_stats_df.csv')
+# Reading a file of sorted mean distances with associated statistics.
+
+distances_ordered <- distances_ordered %>% select(-X)
+# Dropping the "X" column.
+
+frequencies_ordered <- read.csv(file = '/Users/dana/Documents/R/PHD/data_ling/average_relative_frequency_sorted_df.csv')
+# Reading a file of average relative frequencies sorted in some way.
+
+moran_df <- read.csv(file = '/Users/dana/Documents/R/PHD/data_ling/kriged/morans_10k.csv')
+# Reading a file with Moran's I statistics, which measure spatial autocorrelation.
+
+colnames(moran_df) <- c("Word", "Morans_I")
+# Renaming columns to "Word" and "Morans_I" (the Moran's I statistic for each word).
+
+kriged_all <- read.csv(file = 
+                           '/Users/dana/Documents/R/PHD/data_ling/kriged/kriged_10k_300cutoff.csv', 
+                         header = TRUE)
+# Re-reading the kriged data file from the local system (likely an interpolation output).
+
+names(kriged_all) <- gsub("\\.", "", names(kriged_all))
+# Removing dots from column names.
+
+names(kriged_all) <- gsub("\\<X", "", names(kriged_all))
+# Removing "X" from the beginning of column names.
+
+corpus <- kriged_all
+# Assigning the kriged data to the corpus object again.
+
+kriged_all <- kriged_all %>% dplyr::select(1:2002)
+# Selecting the first 2002 columns from the kriged data again.
+
+
+## STRINGS ##
 strings <- tolower(c("aber", "eigentlich", "isses", "mir", "echt", "egal"))
+# Creating a vector of specific German words and converting them to lowercase.
+
 strings <- unique(strings)
+# Keeping only unique values (removes duplicates if any).
 ```
 
 ## Distance Matrix
@@ -89,51 +171,110 @@ strings <- unique(strings)
 Creating a matrix of all locations and the top 10k words with the distance between each word's hotspot and the given location. 
 
 ```{r dist_m}
-# create the distance matrix
+# Creates an empty matrix where:
+# - The number of rows equals the number of cities (from 'city_names').
+# - The number of columns equals the number of words (from 'word_names').
+# - The row names will correspond to city names and column names to word names.
 distance_matrix <- matrix(nrow = length(city_names), ncol = length(word_names),
                           dimnames = list(city_names, word_names))
 
+# Loop over each city in the 'city_list' dataset.
 for (i in 1:nrow(city_list)) {
   city <- city_list$City[i]
   org_lon <- city_list$lon[i]
   org_lat <- city_list$lat[i]
+  # Extracts the city name, longitude (org_lon), and latitude (org_lat).
   
+  # Loop over each word (or token) in 'max_onlies'.
   for (j in 1:nrow(max_onlies)) {
     instance <- max_onlies$word[j]
     hot_lon <- max_onlies$lon[j]
     hot_lat <- max_onlies$lat[j]
+    # Extracts the word ('instance') and its geographical coordinates (hot_lon and hot_lat).
+    
     distance <- distm(c(org_lon, org_lat), c(hot_lon, hot_lat), fun = distGeo) / 1000
+    # Calculates the geographic distance between the current city (org_lon, org_lat) and the current word's location (hot_lon, hot_lat).
+    # Uses 'distGeo' from the geosphere package to compute great-circle distances (in meters).
+    # Divides by 1000 to convert the distance from meters to kilometers.
+    
     distance_matrix[city, instance] <- distance
+    # Stores the calculated distance in the appropriate cell of the distance matrix (for the current city and word).
   }
 }
 
+
 distance_df <- as.data.frame(distance_matrix)
+# Converts the 'distance_matrix' into a data frame for easier manipulation and export.
+
 rownames(distance_df) <- city_names
-write.csv(distance_df, "/rds/projects/g/grievej-german-dialect-profiling/distance_matrix.csv", row.names = TRUE, fileEncoding = "UTF-8")
+# Sets the row names of the dataframe to be the names of the cities.
+
+write.csv(distance_df, "/rds/projects/g/grievej-german-dialect-profiling/distance_matrix.csv", 
+          row.names = TRUE, fileEncoding = "UTF-8")
+# Writes the 'distance_df' to a CSV file, saving it with the name 'distance_matrix.csv' in the specified directory.
+# 'row.names = TRUE' ensures that the city names (row names) are included in the CSV.
+# 'fileEncoding = "UTF-8"' ensures the file is written with UTF-8 encoding to handle special characters.
 ```
 
 Getting the stats for the distance matrix
 
 ```{r dist_m_stats}
-# get the stats for the distance matrix
+# Read the distance matrix from a CSV file
 distance_matrix <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/distance_matrix.csv') 
-colnames(distance_matrix)[1] <- "city_loc"
+# Each value in the matrix represents the distance (in km) between a city and the geographical location of a word.
 
-word_means <- colMeans(distance_matrix[, 2:ncol(distance_matrix)], na.rm = TRUE)
-word_sds <- apply(distance_matrix[, 2:ncol(distance_matrix)], 2, sd, na.rm = TRUE)
-word_medians <- apply(distance_matrix[, 2:ncol(distance_matrix)], 2, median, na.rm = TRUE)
+colnames(distance_matrix)[1] <- "city_loc"
+# Renames the first column to "city_loc" to make it clear that this column represents city locations.
+
+word_means <- colMeans(distance_matrix[, 2:ncol(distance_matrix)], 
+                       na.rm = TRUE)
+# Calculates the mean distance for each word across all cities.
+# 'na.rm = TRUE' ensures that missing values (NA) are ignored when calculating the mean.
+
+word_sds <- apply(distance_matrix[, 2:ncol(distance_matrix)], 
+                  2, 
+                  sd, 
+                  na.rm = TRUE)
+# Calculates the standard deviation (SD) for each word across all cities.
+# Uses 'apply' to calculate the SD across columns (each column represents a word).
+# 'na.rm = TRUE' ensures missing values are ignored.
+
+word_medians <- apply(distance_matrix[, 2:ncol(distance_matrix)], 
+                      2, 
+                      median, 
+                      na.rm = TRUE)
+# Calculates the median distance for each word across all cities.
+# 'apply' is used to calculate the median for each column (word), ignoring NA values.
+
 get_mode <- function(x) {
   uniq_x <- unique(x)
   uniq_x[which.max(tabulate(match(x, uniq_x)))]
 }
-word_modes <- apply(distance_matrix[, 2:ncol(distance_matrix)], 2, get_mode)
+# Defines a custom function to calculate the mode (most frequent value) for a vector.
+# 'unique(x)' gets the unique values in the vector.
+# 'tabulate' counts the number of occurrences of each unique value.
+# 'which.max' finds the value with the highest count (i.e., the mode).
 
-# just mean
+word_modes <- apply(distance_matrix[, 2:ncol(distance_matrix)], 
+                    2, 
+                    get_mode)
+# Applies the 'get_mode' function to each word (column) to calculate the mode.
+# This returns the most frequent distance for each word across cities.
+
+# Just mean distances
 words <- colnames(distance_matrix)[2:ncol(distance_matrix)] 
-mean_distance_df <- data.frame(word = words, mean_distance = word_means)
-sorted_mean_distance_df <- mean_distance_df[order(mean_distance_df$mean_distance), ]
+# Gets the names of the words from the columns (excluding the first column, which is for city locations).
 
-# all of the stats
+mean_distance_df <- data.frame(word = words, mean_distance = word_means)
+# Creates a data frame with two columns:
+# 1. 'word' – the name of each word.
+# 2. 'mean_distance' – the mean distance for each word across all cities.
+
+sorted_mean_distance_df <- mean_distance_df[order(mean_distance_df$mean_distance), ]
+# Sorts the data frame by the 'mean_distance' column in ascending order.
+# This will rank words based on how close or far their average distance is across cities.
+
+# All of the statistics
 results <- data.frame(
   Word = words,
   Mean = word_means,
@@ -141,11 +282,29 @@ results <- data.frame(
   Median = word_medians,
   Mode = word_modes
 )
+# Creates a data frame that includes all the calculated statistics for each word:
+# - 'Word' – the name of the word.
+# - 'Mean' – the mean distance for the word.
+# - 'SD' – the standard deviation of the distances for the word.
+# - 'Median' – the median distance for the word.
+# - 'Mode' – the most frequent (modal) distance for the word.
+
 results_sorted <- results %>%
   arrange(Mean)
+# Sorts the 'results' data frame by the 'Mean' column in ascending order.
 
-write.csv(sorted_mean_distance_df, "/rds/projects/g/grievej-german-dialect-profiling/sorted_mean_distance_df.csv", row.names = TRUE, fileEncoding = "UTF-8")
-write.csv(results_sorted, "/rds/projects/g/grievej-german-dialect-profiling/sorted_mean_distance_with_stats_df.csv", row.names = TRUE, fileEncoding = "UTF-8")
+
+write.csv(sorted_mean_distance_df, "/rds/projects/g/grievej-german-dialect-profiling/sorted_mean_distance_df.csv", 
+          row.names = TRUE, 
+          fileEncoding = "UTF-8")
+# Writes the sorted mean distance data frame to a CSV file.
+# 'row.names = TRUE' ensures that row names (which correspond to the words) are included in the file.
+
+write.csv(results_sorted, "/rds/projects/g/grievej-german-dialect-profiling/sorted_mean_distance_with_stats_df.csv", 
+          row.names = TRUE, 
+          fileEncoding = "UTF-8")
+# Writes the full statistics (mean, SD, median, mode) sorted by mean distance to a CSV file.
+
 ```
 
 ## Frequency Matrix
@@ -153,64 +312,153 @@ write.csv(results_sorted, "/rds/projects/g/grievej-german-dialect-profiling/sort
 Same as above, all locations and top 10k words in a matrix with the raw frequency of the word at that locations.
 
 ```{r freq_m}
-# create frequency matrix
-#frequency_matrix <- corpus %>%
-#  filter(word %in% max_onlies$word & city %in% city_list$City) %>%
-#  group_by(city, word) %>%
-#  summarise(frequency = sum(n, na.rm = TRUE)) %>%
-#  spread(word, frequency, fill = 0)
-
+# Create a frequency matrix by filtering and summarizing the corpus
+# Filters the 'corpus' data frame to keep only rows where:
 frequency_matrix <- corpus %>%
+  # - The 'word' is present in the 'max_onlies' dataset (words of interest).
+  # - The 'city' is present in the 'city_list' dataset (relevant cities).
   filter(word %in% max_onlies$word & city %in% city_list$City) %>%
+  # Groups the filtered data by 'city' and 'word'.
   group_by(city, word) %>%
-  summarise(frequency = sum(n, na.rm = TRUE), .groups = 'drop') 
+  # Summarizes the data by calculating the total frequency ('n') for each word in each city.
+  summarise(frequency = sum(n, na.rm = TRUE), 
+            # '.groups = 'drop'' specifies that the grouping structure 
+            # should be dropped after summarization.
+            .groups = 'drop') 
 
+ 
+# Create a complete frequency matrix including all combinations of cities and words
 frequency_matrix_complete <- city_list %>%
+  # Starts with the 'city_list' and selects only the 'City' column.
   select(City) %>%
+  # 'crossing' generates a complete combination of 'City' and each word from 
+  # 'max_onlies$word', producing a data frame where every city is paired with every word.
   crossing(word = max_onlies$word) %>%
-  left_join(frequency_matrix, by = c("City" = "city", "word" = "word")) %>%
+  # 'left_join' merges this complete combination with 'frequency_matrix' 
+  #  to include the actual frequency data.
+  left_join(frequency_matrix, 
+            # The join is done on the matching 'City' and 'word' columns.
+            by = c("City" = "city", "word" = "word")) %>%
+  # 'replace_na' replaces any NA values in the 'frequency' column with 0, 
+  # indicating that the word was not present in that city.
   replace_na(list(frequency = 0))
 
-frequency_matrix_final <- frequency_matrix_complete %>%
-  pivot_wider(names_from = word, values_from = frequency, values_fill = list(frequency = 0))
 
+# Reshape the data to a wider format
+frequency_matrix_final <- frequency_matrix_complete %>%
+  # Uses 'pivot_wider' to reshape the data frame from long format to wide format.
+  # 'names_from = word' specifies that the unique words should become column names.
+  pivot_wider(names_from = word, 
+              # 'values_from = frequency' specifies that the values in these columns 
+              # should be taken from the 'frequency' column.
+              values_from = frequency, 
+              # 'values_fill = list(frequency = 0)' fills in any missing values with 0, 
+              # indicating that there were no occurrences of that word in that city.
+              values_fill = list(frequency = 0))
+
+
+# Rename the first column to 'city_lon_lat'
 colnames(frequency_matrix_final)[1] <- "city_lon_lat"
 
+# Select only relevant columns for the final matrix
 frequency_matrix_done <- frequency_matrix_final %>%
-  select(city_lon_lat, all_of(max_onlies$word))
+  select(city_lon_lat, 
+         all_of(max_onlies$word))
 
-write.csv(frequency_matrix_done, "/rds/projects/g/grievej-german-dialect-profiling/frequency_df.csv", row.names = TRUE, fileEncoding = "UTF-8")
+# Write the final frequency data frame to a CSV file
+write.csv(frequency_matrix_done, "/rds/projects/g/grievej-german-dialect-profiling/frequency_df.csv", 
+          row.names = TRUE, fileEncoding = "UTF-8")
+
 #frequency_df <- frequency_matrix_done
 ```
 
 Dividing the raw frequencies by the token count at each location. 
 
 ```{r rel_freq_m}
-# convert to relative frequency matrix
+# Ensure no row_names column is present
+colnames(frequency_df)[1] <- "rownames"
+frequency_df <- frequency_df %>%
+  select(-rownames)
+
+# Filter the tokens dataset to keep only cities that are present in 'frequency_df'
 tokens_filtered <- tokens %>%
   filter(city %in% frequency_df$city_lon_lat)
-colnames(tokens_filtered) <- c("city_lon_lat", "token_count")
-tokens_ordered <- tokens_filtered$token_count[match(frequency_df$city_lon_lat, tokens_filtered$city_lon_lat)]
-relative_frequency_df <- frequency_df
-relative_frequency_df[, -1] <- sweep(frequency_df[, -1], 1, tokens_ordered, "/")
+# Filters the 'tokens' data frame to include only those rows where the 'city' (in 'tokens') is also found in 'frequency_df$city_lon_lat'.
 
-write.csv(relative_frequency_df, "/rds/projects/g/grievej-german-dialect-profiling/relative_frequency_df.csv", row.names = FALSE, fileEncoding = "UTF-8")
+# Renames the columns of 'tokens_filtered' to have clearer names:
+colnames(tokens_filtered) <- c("city_lon_lat", "token_count")
+
+# Matches the cities in 'frequency_df' to those in 'tokens_filtered' 
+# and extracts the corresponding token counts.
+tokens_ordered <- tokens_filtered$token_count[match(frequency_df$city_lon_lat,
+                                                    tokens_filtered$city_lon_lat)]
+# 'match' finds the positions of 'frequency_df$city_lon_lat' in 
+# 'tokens_filtered$city_lon_lat', and returns the token counts in the correct order.
+
+relative_frequency_df <- frequency_df
+# Creates a copy of 'frequency_df' called 'relative_frequency_df'.
+
+# Converts absolute frequencies to relative frequencies.
+# 'frequency_df[, -1]' selects all columns except the first one.
+relative_frequency_df[, -1] <- sweep(frequency_df[, -1], 
+                                     1, 
+                                     tokens_ordered, 
+                                     "/")
+# 'sweep' divides each row of the frequency data by the corresponding 
+# 'tokens_ordered' value (the total token count for each city).
+
+# add the token counts to the dataframe for further filtering
+relative_frequency_df$TokenCount <- tokens_ordered
+
+# reorder the meta columns to the beginning of df
+relative_frequency_df <- relative_frequency_df %>%
+  select(city_lon_lat, TokenCount, everything())
+
+# Writes the resulting relative frequency data frame to a CSV file.
+write.csv(relative_frequency_df, "/rds/projects/g/grievej-german-dialect-profiling/relative_frequency_df.csv", 
+          row.names = FALSE, 
+          fileEncoding = "UTF-8")
+
+# or locally
+write.csv(relative_frequency_df, "/Users/dana/Documents/R/PHD/data_ling/frequency/relative_frequency_df.csv", 
+          row.names = FALSE, 
+          fileEncoding = "UTF-8")
 ```
 
 Getting the averaged relative frequency stats by word.
 
 ```{r ave_freq_m}
-# also get an averaged version of the freq matrix
-word_means <- colMeans(relative_frequency_df[, 2:ncol(relative_frequency_df)], na.rm = TRUE)
-word_sds <- apply(relative_frequency_df[, 2:ncol(relative_frequency_df)], 2, sd, na.rm = TRUE)
-word_medians <- apply(relative_frequency_df[, 2:ncol(relative_frequency_df)], 2, median, na.rm = TRUE)
+# Calculate mean frequencies for each word (ignoring NAs)
+word_means <- colMeans(relative_frequency_df[, 2:ncol(relative_frequency_df)], 
+                       na.rm = TRUE)
+
+# Calculate standard deviations for each word
+word_sds <- apply(relative_frequency_df[, 2:ncol(relative_frequency_df)], 
+                  2, 
+                  sd, 
+                  na.rm = TRUE)
+
+# Calculate median frequencies for each word
+word_medians <- apply(relative_frequency_df[, 2:ncol(relative_frequency_df)], 
+                      2, 
+                      median, 
+                      na.rm = TRUE)
+
+# Function to calculate the mode of a vector
 get_mode <- function(x) {
-  uniq_x <- unique(x)
-  uniq_x[which.max(tabulate(match(x, uniq_x)))]
+  uniq_x <- unique(x)  # Get unique values
+  uniq_x[which.max(tabulate(match(x, uniq_x)))]  # Return the most frequent value
 }
-word_modes <- apply(relative_frequency_df[, 2:ncol(relative_frequency_df)], 2, get_mode)
+
+# Calculate modes for each word
+word_modes <- apply(relative_frequency_df[, 2:ncol(relative_frequency_df)], 
+                    2, 
+                    get_mode)
+
+# Extract word names from the columns
 words <- colnames(relative_frequency_df)[2:ncol(relative_frequency_df)] 
 
+# Create a results data frame with words and their statistical measures
 results <- data.frame(
   Word = words,
   Mean = word_means,
@@ -218,11 +466,19 @@ results <- data.frame(
   Median = word_medians,
   Mode = word_modes
 )
-results_sorted <- results %>% select(-Mode, -Median) %>%
+
+# Sort results by Mean and drop Median and Mode columns
+results_sorted <- results %>% 
+  select(-Mode, -Median) %>%
   arrange(Mean)
+
+# Store the sorted results in a new variable
 ave_rel_freq <- results_sorted
 
-write.csv(results_sorted, "/rds/projects/g/grievej-german-dialect-profiling/average_relative_frequency_sorted_df.csv", row.names = FALSE, fileEncoding = "UTF-8")
+# Write the sorted results to a CSV file
+write.csv(results_sorted, "/rds/projects/g/grievej-german-dialect-profiling/average_relative_frequency_sorted_df.csv", 
+          row.names = FALSE, 
+          fileEncoding = "UTF-8")
 ```
 
 ## Weighting
@@ -231,10 +487,12 @@ Weighting by the average distance of the word from hotspot to locations, smalles
 Inverse 
 
 ```{r dist_weight}
+# Function to weight by distance for strings
 distance_weighted <- function(strings, distance_df) {
   # Step 1: Initialize the kriged values based on longitude and latitude
   kriged_values <- kriged_all %>% 
-    select(lon, lat)
+    select(lon, 
+           lat)
   
   # Step 2: Loop through the words (strings) to extract the kriged values for each word
   for (cname in strings) {
@@ -245,11 +503,13 @@ distance_weighted <- function(strings, distance_df) {
   
   # Step 3: Prepare the calculation dataframe by removing lon and lat
   data_for_calculations <- kriged_values %>% 
-    select(-lon, -lat)
+    select(-lon, 
+           -lat)
   
   # Step 4: Prepare calculation dataframe for weighted values (initialize lon, lat)
   calculation <- kriged_values %>% 
-    select(lon, lat)
+    select(lon, 
+           lat)
   
   # Step 5: Loop through each word to apply weights based on distance and calculate weighted mean
   for (cname in strings) {
@@ -260,7 +520,9 @@ distance_weighted <- function(strings, distance_df) {
         pull(Mean)
       
       # If weight is found, apply it; otherwise, default to 1 (no weighting)
-      weight <- ifelse(length(weight) == 1, weight, 1)
+      weight <- ifelse(length(weight) == 1, 
+                       weight, 
+                       1)
       
       # Apply weighting to the kriged values for the word
       data_for_calculations[, cname] <- data_for_calculations[, cname] * (1 / weight)
@@ -268,9 +530,16 @@ distance_weighted <- function(strings, distance_df) {
   }
   
   # Step 6: Compute summary statistics with the weighted kriged values
-  calculation$weighted_mean <- rowMeans(data_for_calculations, na.rm = TRUE)
-  calculation$weighted_median <- apply(data_for_calculations, 1, median, na.rm = TRUE)
-  calculation$weighted_sd <- apply(data_for_calculations, 1, sd, na.rm = TRUE)
+  calculation$weighted_mean <- rowMeans(data_for_calculations, 
+                                        na.rm = TRUE)
+  calculation$weighted_median <- apply(data_for_calculations, 
+                                       1, 
+                                       median, 
+                                       na.rm = TRUE)
+  calculation$weighted_sd <- apply(data_for_calculations, 
+                                   1, 
+                                   sd, 
+                                   na.rm = TRUE)
   
   # Return the complete calculation dataframe with all statistics
   return(calculation)
@@ -281,10 +550,12 @@ results_weighted <- distance_weighted(strings, distance_sorted)
 ```
 
 ```{r freq_weight}
+# Function to weight by frequency for strings
 freq_weighted <- function(strings, ave_rel_freq) {
   # Select kriged values and keep lon and lat
   kriged_values <- kriged_all %>%
-    select(lon, lat)
+    select(lon, 
+           lat)
   
   # Initialize results dataframe with NA for mean, median, and sd
   calculations <- data.frame(
@@ -315,9 +586,18 @@ freq_weighted <- function(strings, ave_rel_freq) {
       
       # Store results in calculations DataFrame
       calculations <- calculations %>%
-        mutate(mean_val = ifelse(is.na(mean_val), mean(weighted_values, na.rm = TRUE), mean_val),
-               median_val = ifelse(is.na(median_val), median(weighted_values, na.rm = TRUE), median_val),
-               sd_val = ifelse(is.na(sd_val), sd(weighted_values, na.rm = TRUE), sd_val))
+        mutate(mean_val = ifelse(is.na(mean_val), 
+                                 mean(weighted_values, 
+                                      na.rm = TRUE), 
+                                 mean_val),
+               median_val = ifelse(is.na(median_val), 
+                                   median(weighted_values, 
+                                          na.rm = TRUE), 
+                                   median_val),
+               sd_val = ifelse(is.na(sd_val), 
+                               sd(weighted_values, 
+                                  na.rm = TRUE), 
+                               sd_val))
     }
   }
   
@@ -329,11 +609,80 @@ freq_weighted <- function(strings, ave_rel_freq) {
 results_statistics <- freq_weighted(strings, ave_rel_freq)
 ```
 
+```{r morans}
+# Function to weight by moran's I for strings
+moran_weighted <- function(strings, moran_df) {
+  # Step 1: Initialize the kriged values based on longitude and latitude
+  kriged_values <- kriged_all %>%
+    select(lon, 
+           lat)
+  
+  # Step 2: Loop through the words (strings) to extract the kriged values for each word
+  for (cname in strings) {
+    if (cname %in% colnames(kriged_all)) {
+      kriged_values[, paste0(cname)] <- as.numeric(unlist(kriged_all[, cname]))
+    }
+  }
+  
+  # Step 3: Prepare the calculation dataframe by removing lon and lat
+  data_for_calculations <- kriged_values %>%
+    select(-lon, 
+           -lat)
+  
+  # Step 4: Prepare calculation dataframe for weighted values (initialize lon, lat)
+  calculation <- kriged_values %>%
+    select(lon, 
+           lat)
+  
+  # Step 5: Loop through each word to apply weights based on Moran's I and calculate weighted mean
+  for (cname in strings) {
+    if (cname %in% colnames(kriged_all)) {
+      # Get the Moran's I value for the word from the moran_df dataframe
+      weight <- moran_df %>%
+        filter(Word == cname) %>%
+        pull(Morans_I)
+      
+      # If Moran's I value is found, apply it; otherwise, default to 1 (no weighting)
+      weight <- ifelse(length(weight) == 1, 
+                       weight, 
+                       1)
+      
+      # Apply weighting to the kriged values for the word
+      data_for_calculations[, cname] <- data_for_calculations[, cname] * weight
+    }
+  }
+  
+  # Step 6: Compute summary statistics with the weighted kriged values
+  calculation$weighted_mean <- rowMeans(data_for_calculations, 
+                                        na.rm = TRUE)
+  calculation$weighted_median <- apply(data_for_calculations, 
+                                       1, 
+                                       median, 
+                                       na.rm = TRUE)
+  calculation$weighted_sd <- apply(data_for_calculations, 
+                                   1, 
+                                   sd, 
+                                   na.rm = TRUE)
+  
+  # Return the complete calculation dataframe with all statistics
+  return(calculation)
+}
+
+# Example usage
+results_moran_weighted <- moran_weighted(strings, moran_df)
+```
+
+Get the max points after weighting.
+
 ```{r max_point_extr}
+# Function to extract the weighted points for strings
+# n is number of extracted points
+# weighting is by distance
 max_points_weighted <- function(strings, n, distance_df) {
   # Step 1: Initialize the kriged values based on longitude and latitude
   kriged_values <- kriged_all %>% 
-    select(lon, lat)
+    select(lon, 
+           lat)
   
   # Step 2: Loop through the words (strings) to extract the kriged values for each word
   for (cname in strings) {
@@ -344,11 +693,13 @@ max_points_weighted <- function(strings, n, distance_df) {
   
   # Step 3: Prepare the calculation dataframe by removing lon and lat
   data_for_calculations <- kriged_values %>% 
-    select(-lon, -lat)
+    select(-lon, 
+           -lat)
   
   # Step 4: Prepare calculation dataframe for weighted values (initialize lon, lat)
   calculation <- kriged_values %>% 
-    select(lon, lat)
+    select(lon, 
+           lat)
   
   # Step 5: Loop through each word to apply weights based on distance and calculate weighted mean
   for (cname in strings) {
@@ -359,7 +710,9 @@ max_points_weighted <- function(strings, n, distance_df) {
         pull(Mean)
       
       # If weight is found, apply it; otherwise, default to 1 (no weighting)
-      weight <- ifelse(length(weight) == 1, weight, 1)
+      weight <- ifelse(length(weight) == 1, 
+                       weight, 
+                       1)
       
       # Apply weighting to the kriged values for the word
       # Weighting Logic: I introduced a new loop where each word’s kriged values are weighted by the inverse of its average distance (1 / weight), so closer words have more influence.
@@ -368,16 +721,25 @@ max_points_weighted <- function(strings, n, distance_df) {
   }
   
   # Step 6: Compute summary statistics with the weighted kriged values
-  calculation$weighted_mean <- rowMeans(data_for_calculations, na.rm = TRUE)
-  calculation$weighted_median <- apply(data_for_calculations, 1, median, na.rm = TRUE)
-  calculation$weighted_sd <- apply(data_for_calculations, 1, sd, na.rm = TRUE)
+  calculation$weighted_mean <- rowMeans(data_for_calculations, 
+                                        na.rm = TRUE)
+  calculation$weighted_median <- apply(data_for_calculations, 
+                                       1, 
+                                       median, 
+                                       na.rm = TRUE)
+  calculation$weighted_sd <- apply(data_for_calculations, 
+                                   1, 
+                                   sd, 
+                                   na.rm = TRUE)
   
   # Step 7: Get the top n locations based on the weighted mean values
   mean_pred <- calculation %>% 
     filter(weighted_mean > 0) %>% 
     arrange(desc(weighted_mean)) %>%
     slice(1:n) %>% 
-    dplyr::select(weighted_mean, lon, lat)
+    dplyr::select(weighted_mean, 
+                  lon, 
+                  lat)
   
   # Return the results
   return(mean_pred)

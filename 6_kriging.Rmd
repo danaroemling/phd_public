@@ -3,11 +3,37 @@ title: "Kriging and Maps with kriged data"
 author: "Dana"
 date: '2022-11-08'
 output: html_document
+toc: true
+toc_float: true
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
+
+## In this RMD
+
+1. Lots of setup
+2. Creating the grids
+3. Extract word of interest
+4. Plot that with polgyon (single and double)
+5. Variogram & Kriging (single and double)
+6. Mapping Single
+    - light_mode_plot_cont_fill_purple
+    - light_mode_plot_7_bands_purple
+    - dark_mode_plot_cont_fill_green
+    - dark_mode_plot_7_bands_green
+    - dark_mode_isogloss_plot_green
+    - light_mode_plot_N_bands_purple
+    - dark_mode_plot_N_bands_green
+    - plot_dark_mode_quantile_breaks
+7. Mapping Comparison
+    - light_mode_comparison_orange_purple
+    - light_mode_comparison_orange_purple_legend
+    - dark_mode_comparison_green_yellow
+    - dark_mode_comparison_green_yellow_legend
+8. Extracting
+
 
 ## Kriging
 
@@ -19,42 +45,58 @@ In this markdown I will save all the code I need for the kriging and the interpo
 We'll start by loading the libraries & the data.
 
 ```{r libs n data}
-library(sf)
-library(sp)
-library(tidyverse)
-library(gstat)
-library(stringr) # regex
-library(dplyr) # regex
-library(scales)
-library(classInt)
-library(viridis)
-library(viridisLite)
+# Load required libraries for data manipulation, spatial analysis, and visualization.
+library(sf)          # For handling spatial data (Simple Features)
+library(sp)          # For spatial data analysis
+library(tidyverse)   # For data manipulation and visualization (includes ggplot2, dplyr, etc.)
+library(gstat)       # For geostatistical modeling and kriging
+library(stringr)     # For string manipulation using regular expressions
+library(dplyr)       # For data manipulation using the pipe operator and other functions
+library(scales)      # For scaling visual elements in ggplot2
+library(classInt)    # For classifying data into intervals (used in mapping)
+library(viridis)     # For color scales in visualizations (colorblind-friendly)
+library(viridisLite) # Lightweight version of viridis for faster performance
+library(rnaturalearth) # for accessing natural Earth geographic data
+library(rnaturalearthhires) # for accessing natural Earth geographic data
 
-# data on local
+# Load local dataset (on the local machine):
+# - 'corpus' contains the main linguistic data matrix for analysis
+# - 'token_at_location' contains token counts at specific city locations
+# - 'longlat' contains longitude and latitude coordinates for the GSA regions
+# - 'longlat_small' contains filtered coordinate data excluding small areas
 corpus <- read.csv(file = './data_ling/full_matrix_for_filtering.csv') 
 token_at_location <- read.csv(file = './data_ling/tokens_at_location.csv')
-colnames(token_at_location) <- c("City", "Tokencount") 
-longlat <- read.csv(file = './data_maps/gsa_geo_filtered.csv')
-longlat_small <- read.csv(file = './data_maps/gsa_geo_filtered_nosmall22.csv')
-#longlat_small <- read.csv(file = './data_maps/gsa_geo_filtered_nosmall85.csv')
+colnames(token_at_location) <- c("City", "Tokencount")  # Renaming columns to "City" and "Tokencount"
+longlat <- read.csv(file = './data_maps/gsa_geo_filtered.csv') # Full set of geographical coordinates
+longlat_small <- read.csv(file = './data_maps/gsa_geo_filtered_nosmall22.csv') # Filtered coordinates, excluding smaller areas
+# longlat_small <- read.csv(file = './data_maps/gsa_geo_filtered_nosmall85.csv') # (Alternate dataset)
 
-# data on server
+# Load dataset from the server (used when working on a remote server):
+# Same datasets as above but from a different file path (on the server).
 corpus <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/full_matrix_for_filtering.csv') 
 token_at_location <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/tokens_at_location.csv')
-colnames(token_at_location) <- c("City", "Tokencount") 
-longlat <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/gsa_geo_filtered.csv')
-longlat_small <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/gsa_geo_filtered_nosmall22.csv')
-longlat_small <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/gsa_geo_filtered_nosmall85.csv')
+colnames(token_at_location) <- c("City", "Tokencount")  # Renaming columns for consistency
+longlat <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/gsa_geo_filtered.csv') # Full geographical data
+longlat_small <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/gsa_geo_filtered_nosmall22.csv') # Filtered coordinates (version 22)
+longlat_small <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/gsa_geo_filtered_nosmall85.csv') # Filtered coordinates (version 85)
 ```
 
 I'll also create an object with some cities, which I can later use to orientate people on the map.
 
 ```{r cities}
+# Create a data frame containing six cities with their corresponding longitude (Long) and latitude (Lat) coordinates.
 cities <- data.frame(
-  City = c("Cologne", "Munich", "Vienna", "Zurich", "Berlin", "Hamburg"),
-  Long = c(6.9578, 11.5755, 16.3731, 8.5417, 13.3833, 10),
-  Lat = c(50.9422, 48.1372, 48.2083, 47.3769, 52.5167, 53.55))
+  City = c("Cologne", "Munich", "Vienna", "Zurich", "Berlin", "Hamburg"),  # City names
+  Long = c(6.9578, 11.5755, 16.3731, 8.5417, 13.3833, 10),  # Longitude values for each city
+  Lat = c(50.9422, 48.1372, 48.2083, 47.3769, 52.5167, 53.55))  # Latitude values for each city
+
+# Define the Coordinate Reference System (CRS) for the spatial data.
+# EPSG:4326 corresponds to WGS84 (World Geodetic System 1984), a standard CRS for geographical coordinates (latitude, longitude).
 crs2 <- CRS("+init=epsg:4326")
+
+# Convert the 'cities' data frame into an 'sf' (simple features) object, which is used for spatial data in R.
+# The 'coords' argument specifies the columns that represent the coordinates (longitude and latitude).
+# 'crs' assigns the Coordinate Reference System to the newly created spatial object.
 cities_sf <- st_as_sf(cities, coords = c("Long", "Lat"), crs = crs2)
 ```
 
@@ -64,116 +106,191 @@ cities_sf <- st_as_sf(cities, coords = c("Long", "Lat"), crs = crs2)
 First, I will create the point grid, which I will need for the kriging. 
 In order for the grid to match my data set, I need the outline of the GSA for this.
 
-```{r gsa shape}
-# shape file on local
-EU <- st_read(dsn="./data_maps/EU/Try/", layer="NUTS_RG_20M_2021_3035")
+```{r gsa_shape}
+# Read in a shapefile for the European Union (EU) from a local directory using the 'sf' package
+EU <- st_read(dsn="./data_maps/EU/Try/", 
+              layer="NUTS_RG_20M_2021_3035")
 
-# shape file on server
-EU <- st_read(dsn="/rds/projects/g/grievej-german-dialect-profiling/shape/EU/Try/", layer="NUTS_RG_20M_2021_3035")
+# Read in the same shapefile from a remote server directory (used when working on a server)
+EU <- st_read(dsn="/rds/projects/g/grievej-german-dialect-profiling/shape/EU/Try/", 
+              layer="NUTS_RG_20M_2021_3035")
 
-# change projection
+# Change the projection (coordinate reference system) of the shapefile to WGS84, a common CRS for geographical data
 EU <- st_transform(EU, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
 
-# get gsa outline
-#gsa_string <- c("DE", "AT", "CH")
-#gsa <- filter(EU, CNTR_CODE %in% gsa_string)
-#gsa_outline <- filter(gsa, LEVL_CODE == 0)
-#gsa_plot <- gsa_outline %>% dplyr::select(geometry) # just the outlines of the three
-#gsa_spatial <- as_Spatial(gsa_plot) # new object as spatial instead of sf
+# (Commented out) Alternative method to create an outline of Germany, Austria, and Switzerland (GSA region)
+# gsa_string <- c("DE", "AT", "CH")  # Define GSA region countries by their ISO country codes
+# gsa <- filter(EU, CNTR_CODE %in% gsa_string)  # Filter the EU data to include only GSA region countries
+# gsa_outline <- filter(gsa, LEVL_CODE == 0)  # Get only the level-0 regions (country outlines)
+# gsa_plot <- gsa_outline %>% dplyr::select(geometry)  # Select only the geometry column for the outlines
+# gsa_spatial <- as_Spatial(gsa_plot)  # Convert the 'sf' object into a 'Spatial' object
 
-# with usual code / alternative
-gsa_outline <- ne_countries(country = c("Austria", "Germany", "Switzerland"), returnclass="sf", scale = "large")
-gsa_plot <- gsa_outline %>% dplyr::select(geometry) # just the outlines of the three
-gsa_spatial <- as_Spatial(gsa_plot) # new object as spatial instead of sf
+# Alternative method using the 'rnaturalearth' package to obtain country outlines
+# This is an alternative approach to get country outlines using the 'rnaturalearth' package
+gsa_outline <- ne_countries(country = 
+                              c("Austria", "Germany", "Switzerland"), returnclass="sf", scale = "large")
+
+# Select only the geometry column to extract the country outlines
+gsa_plot <- gsa_outline %>% 
+  dplyr::select(geometry)
+
+# Convert the 'sf' (simple features) object to a 'Spatial' object for compatibility with certain spatial analysis tools
+gsa_spatial <- as_Spatial(gsa_plot)
 ```
 
 The grid needs to be in the same projection as the shape file I am working with. The cell size of the grid is in relation to the CRS, so to my projection, so it should be a factor of a degree, since the 4326 projection is measured in degrees. 
 As it seems to be an issue how the grid is created, this is how to create it without sf, but with sp. With this, all objects are of class S4 and spatial objects (also no polygons, as that would introduce block kriging!).
 
-```{r grid points}
+```{r grid_points}
 # large grid
+# Generate a large spatial grid with 100,000 points sampled in a regular pattern
 sp_grid <- as.data.frame(spsample(gsa_spatial,
                                   n = 100000,
                                   type = "regular", # systematically aligned sampling
                                   offset = c(0.5,0.5))) # makes sure grid is the same every time
+
 # This grid needs A CRS and to be turned into a spatial object, which this line does:
-sp_grid_sf <- st_as_sf(sp_grid, coords=c("x1","x2"), crs = st_crs(4326))
-
-
+sp_grid_sf <- st_as_sf(sp_grid, 
+                       coords = c("x1","x2"), 
+                       crs = st_crs(4326))
 
 # small grid
+# Generate a smaller spatial grid with 500 points sampled in a regular pattern
 sp_grid_small <- as.data.frame(spsample(gsa_spatial,
                                   n = 500,
                                   type = "regular", # systematically aligned sampling
                                   offset = c(0.5,0.5))) # makes sure grid is the same every time
+
 # This grid needs A CRS and to be turned into a spatial object, which this line does:
-sp_grid_sf_small <- st_as_sf(sp_grid_small, coords=c("x1","x2"), crs = st_crs(4326))
+sp_grid_sf_small <- st_as_sf(sp_grid_small, 
+                             coords = c("x1","x2"), 
+                             crs = st_crs(4326))
 ```
 
 This second grid is the one we can use to plot roughly smoothed plots, so it consists of polygons.
 
-```{r grid polygon}
-# create fillable grid
-fishnet <- st_make_grid(st_transform(gsa_plot, crs=st_crs(4326)), cellsize = 0.5) %>% st_sf()
-grid <- fishnet %>% st_intersection(gsa_plot)
+```{r grid_polygon}
+# Create a fillable grid (fishnet) based on the geometry of the GSA outline
+# Transform the GSA plot to the WGS84 coordinate reference system (EPSG:4326) for compatibility
+fishnet <- st_make_grid(st_transform(gsa_plot, 
+                                     crs=st_crs(4326)), 
+                        cellsize = 0.5) %>% 
+  st_sf()
+
+# Intersect the fishnet grid with the GSA plot to obtain only the grid cells that fall within the GSA region
+grid <- fishnet %>% 
+  st_intersection(gsa_plot)
 ```
 
 We need to do some counting and calculation, so that we get an object that we can use as the basis for the variogram and kriging. This is something that I have done in other RMDs and scripts as well, just for ease of kriging, it is also in here.
 
-```{r counting / regex}
-#get word of interest
-one_word <- corpus %>% filter(word == "guck")
+```{r counting_or_regex}
+# Get word of interest
+# Filter the corpus to retrieve data for a word
+one_word <- corpus %>% 
+  filter(word == "guck")
+
+# Rename columns for clarity
 colnames(one_word) <- c("Token", "City", "Frequency")
 
-#merge with geo data
-merger_one <- merge(one_word, longlat, by.x ="City", by.y = "City")
+# Merge with geographic data
+# Combine the filtered word data with geographical coordinates based on the city
+merger_one <- merge(one_word, longlat, by.x = "City", by.y = "City")
+# Rename columns to include longitude and latitude
 colnames(merger_one) <- c("City", "Token", "Frequency", "lon", "lat")
 
-# add relative frequency
-merger <- merge(merger_one, token_at_location, by.x ="City", by.y = "City")
-merger$relfreq <- (merger$Frequency/merger$Tokencount)
-merger$relfreq1000 <- (merger$relfreq*1000)
+# Add relative frequency
+# Merge the previous result with token counts at each location to compute relative frequencies
+merger <- merge(merger_one, token_at_location, by.x = "City", by.y = "City")
+# Calculate the relative frequency by dividing the frequency by the total token count
+merger$relfreq <- (merger$Frequency / merger$Tokencount)
+# Scale the relative frequency to per 1000 tokens for easier interpretation
+merger$relfreq1000 <- (merger$relfreq * 1000)
+# Rename columns to reflect new calculations
 colnames(merger) <- c("City", "Token", "Frequency", "lon", "lat", "TokenCount", "RelativeFrequency", "RelativeFrequencyThousand")
+
+# Display summary statistics for the TokenCount column
 summary(merger$TokenCount)
+
+# Filter to include only cities with more than 4000 tokens
 merger <- merger %>% filter(TokenCount > 4000)
 
-# alternations
+# Handle alternative words for comparison
+# Filter the corpus for a word and rename columns
 one_word <- corpus %>% filter(word == "nix")
 colnames(one_word) <- c("Token", "City", "Frequency")
+
+# Filter the corpus for a word and rename columns
 second_word <- corpus %>% filter(word == "nicht")
 colnames(second_word) <- c("Token", "City", "Frequency")
 
-# combine into one and calculate proportion
-merged <- merge(one_word, second_word, by ="City", all=T)
-# introduce zeros for NAs
-merged$Frequency.x[is.na(merged$Frequency.x)] <- 0
-merged$Frequency.y[is.na(merged$Frequency.y)] <- 0
-merged$Proportion <- (merged$Frequency.x / (merged$Frequency.x + merged$Frequency.y) )
-merged$Percentage <- 100* (merged$Frequency.x / (merged$Frequency.x + merged$Frequency.y) )
+# Combine the frequency data for both words into one dataframe, keeping all records
+merged <- merge(one_word, second_word, by = "City", all = TRUE)
 
-# merge with geo data
-merger <- merge(merged, longlat_small, by.x ="City", by.y = "City")
+# Introduce zeros for missing values in the frequency columns to avoid NA issues
+merged$Frequency.x[is.na(merged$Frequency.x)] <- 0  # Replace NA in "nix" frequency with 0
+merged$Frequency.y[is.na(merged$Frequency.y)] <- 0  # Replace NA in "nicht" frequency with 0
+
+# Calculate the proportion of "nix" relative to the total of "nix" and "nicht"
+merged$Proportion <- (merged$Frequency.x / (merged$Frequency.x + merged$Frequency.y))
+# Convert the proportion to a percentage for clearer interpretation
+merged$Percentage <- 100 * (merged$Frequency.x / (merged$Frequency.x + merged$Frequency.y))
+
+# Merge the combined word frequencies with the smaller geographic data
+merger <- merge(merged, longlat_small, by.x = "City", by.y = "City")
 ```
 
 ### Polygon Plots
 
 Now that I have counted, I first create an sf object of my merger data in the same projection. Then I join it with the grid. This can then be plotted. I create another grid here, as the grid I use for kriging is not polygons, but points. To be able to fill a grid I need polygons.
 
-```{r single grid plot}
-sf_merger <- st_as_sf(merger, coords = c("lon", "lat"), crs = st_crs(4326))
-filled_grid <- grid %>% st_join(sf_merger)
+```{r single_grid_plot}
+# Convert the 'merger' data frame to a simple features (sf) object.
+# 'coords' specifies the columns for longitude and latitude, 
+# and 'crs' sets the coordinate reference system to WGS 84 (EPSG:4326).
+sf_merger <- st_as_sf(merger, 
+                      coords = c("lon", "lat"), 
+                      crs = st_crs(4326))
 
-# show that data is overlapping
+# Perform a spatial join between the 'grid' sf object and the 'sf_merger' sf object. 
+# This will fill the 'grid' with the attributes of 'sf_merger' based on their spatial locations.
+filled_grid <- grid %>% 
+  st_join(sf_merger)
+
+# Visualize the overlapping data using mapview.
+# This will create an interactive map showing the features in 'sf_merger' and 'sp_grid_sf'.
+# Note: 'sp_grid_sf' is assumed to be another spatial object defined elsewhere in the code.
+# Uncomment the following line to display the map.
 # mapview::mapview(sf_merger) + mapview::mapview(sp_grid_sf)
 
+# Create a ggplot object to visualize the 'filled_grid' data.
 ggplot() +
-  geom_sf(data = filled_grid, colour="gray", aes(fill=RelativeFrequencyThousand), size = 0.1) +
-  geom_sf(data = gsa_plot, aes(geometry = geometry), colour="black", fill=NA, size = 0.1) +
+  # Add the filled grid as a layer with gray outlines, filling based on the 'RelativeFrequencyThousand' variable.
+  geom_sf(data = filled_grid, 
+          colour = "gray", 
+          aes(fill = RelativeFrequencyThousand), 
+          size = 0.1) +
+  
+  # Overlay another spatial object 'gsa_plot' with black outlines and no fill.
+  geom_sf(data = gsa_plot, 
+          aes(geometry = geometry), 
+          colour = "black", 
+          fill = NA, 
+          size = 0.1) +
+  
+  # Apply a minimal theme to the plot for a clean look.
   theme_minimal() +
-  scale_fill_continuous(low="mistyrose1", high="mediumpurple4", 
-                         na.value="transparent") +
-  #="transparent" or "white" are options
-  labs(fill="Rel. Frequency\nof 'drauf'") +
+  
+  # Customize the fill scale for the relative frequency variable,
+  # using a gradient from misty rose to medium purple.
+  scale_fill_continuous(low = "mistyrose1", 
+                        high = "mediumpurple4", 
+                        na.value = "transparent") +
+  # Set up labels for the fill legend.
+  labs(fill = "Rel. Frequency\nof 'drauf'") +
+  
+  # Customize the theme to remove axis titles and text, 
+  # and hide the major grid lines.
   theme(axis.title.x = element_blank(), 
         axis.title.y = element_blank(),
         axis.text.x = element_blank(),
@@ -183,35 +300,82 @@ ggplot() +
 
 I can also plot grids like I did in the beginning with proportions. 
 
-```{r double grid plot}
-# plotting alternations
-one_word <- corpus %>% filter(word == "nix")
+```{r double_grid_plot}
+# Filter the corpus data frame for instances of a word
+one_word <- corpus %>% 
+  filter(word == "nix")
+
+# Rename the columns for clarity
 colnames(one_word) <- c("Token", "City", "Frequency")
-second_word <- corpus %>% filter(word == "nicht")
+
+# Filter the corpus data frame for instances of a word 
+second_word <- corpus %>% 
+  filter(word == "nicht")
+
+# Rename the columns for clarity
 colnames(second_word) <- c("Token", "City", "Frequency")
 
-# combine into one and calculate proportion
-merged <- merge(one_word, second_word, by ="City", all=T)
-# introduce zeros for NAs
+# Merge the two data frames by "City", keeping all rows from both data frames
+# This allows us to combine the frequencies of both words for each city
+merged <- merge(one_word, 
+                second_word, 
+                by = "City", 
+                all = TRUE)
+
+# Replace NAs in Frequency.x with 0 to indicate no occurrences
 merged$Frequency.x[is.na(merged$Frequency.x)] <- 0
+# Replace NAs in Frequency.y with 0 to indicate no occurrences
 merged$Frequency.y[is.na(merged$Frequency.y)] <- 0
-merged$Proportion <- (merged$Frequency.x / (merged$Frequency.x + merged$Frequency.y) )
-merged$Percentage <- 100* (merged$Frequency.x / (merged$Frequency.x + merged$Frequency.y) )
 
-# merge with geo data
-merger_double <- merge(merged, longlat, by.x ="City", by.y = "City")
+# Calculate the proportion of first frequency relative to the total occurrences of both words
+merged$Proportion <- (merged$Frequency.x / (merged$Frequency.x + merged$Frequency.y))
+# Calculate the percentage of first frequency relative to the total occurrences of both words
+merged$Percentage <- 100 * (merged$Frequency.x / (merged$Frequency.x + merged$Frequency.y))
 
-# plot with fill and two features
-sf_merger <- st_as_sf(merger_double, coords = c("lon", "lat"), crs = st_crs(4326))
-filled_grid <- grid %>% st_join(sf_merger)
+# Merge the combined data with geographical data (longlat) based on the "City" column
+merger_double <- merge(merged, 
+                       longlat, 
+                       by.x = "City", 
+                       by.y = "City")
+
+# Convert the merged data frame to a simple features (sf) object for spatial visualization
+# 'coords' specifies the columns for longitude and latitude, 
+# and 'crs' sets the coordinate reference system to WGS 84 (EPSG:4326).
+sf_merger <- st_as_sf(merger_double, 
+                      coords = c("lon", "lat"), 
+                      crs = st_crs(4326))
+
+# Perform a spatial join between the grid and the sf_merger object to fill the grid with data
+filled_grid <- grid %>% 
+  st_join(sf_merger)
+
+# Create a ggplot object to visualize the data
 ggplot() +
-  geom_sf(data = gsa_plot, aes(geometry = geometry), colour="black", fill=NA, size = 0.1) +
-  geom_sf(data = filled_grid, colour="gray", aes(fill=filled_grid$Proportion), size = 0.1) +
+  # Add a layer for the geographical features from gsa_plot, outlined in black with no fill
+  geom_sf(data = gsa_plot, 
+          aes(geometry = geometry), 
+          colour = "black", 
+          fill = NA, 
+          size = 0.1) +
+  
+  # Add the filled grid layer, coloring based on the calculated Proportion
+  geom_sf(data = filled_grid, 
+          colour = "gray", 
+          aes(fill = filled_grid$Proportion), 
+          size = 0.1) +
+  
+  # Apply a minimal theme for a clean plot appearance
   theme_minimal() +
-  scale_fill_continuous(low="mistyrose1", high="mediumpurple4", 
-                        na.value="transparent") +
-  #="transparent" or "white" are options
-  labs(fill="Proportion\nof 'nix/nicht'") +
+  
+  # Customize the fill scale for proportions with a gradient from misty rose to medium purple
+  scale_fill_continuous(low = "mistyrose1", 
+                        high = "mediumpurple4", 
+                        na.value = "transparent") +
+  # Set the label for the fill legend
+  labs(fill = "Proportion\nof 'nix/nicht'") +
+  
+  # Customize the theme to remove axis titles and text,
+  # and hide the major grid lines for a cleaner look
   theme(axis.title.x = element_blank(), 
         axis.title.y = element_blank(),
         axis.text.x = element_blank(),
@@ -235,44 +399,89 @@ For projected data, Euclidian distances are computed, for unprojected great circ
 
 This code outputs a variogram with fit line, which I then can use for the kriging. 
 
-```{r single value variogram}
+```{r single_value_variogram}
 # create the data frame needed for variogram
-trial <- merger %>% dplyr::select("lon", "lat", "RelativeFrequencyThousand") #%>% na.omit()
-data <- trial[3]
-coords <- trial[1:2]
-crs <- CRS("+init=epsg:4326") # Different way of setting same CRS
-#crs <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+trial <- merger %>% 
+  dplyr::select("lon", "lat", "RelativeFrequencyThousand") #%>% na.omit()
+# Select longitude, latitude, and the relative frequency variable from the 'merger' data frame.
+
+data <- trial[3] # Extract the 'RelativeFrequencyThousand' column as a separate variable.
+coords <- trial[1:2] # Extract longitude and latitude columns for coordinates.
+crs <- CRS("+init=epsg:4326") # Define the coordinate reference system using EPSG:4326 (WGS 84).
+# Alternative method for defining the same CRS:
+# crs <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+# Create a SpatialPointsDataFrame object, which combines spatial coordinates with associated data.
 spdf <- SpatialPointsDataFrame(coords      = coords,
                                data        = data, 
                                proj4string = crs)
 
-#need to remove duplicates
+# Filter out duplicate coordinates to ensure unique spatial points in the dataset.
 spdf = spdf[which(!duplicated(spdf@coords)), ]
 
-#st_crs(spdf)
-#coordinates(vario_data) <- ~lon+lat # this does the same to turn it into spdf object
+#st_crs(spdf) # Uncomment to check the coordinate reference system of the spdf object.
+#coordinates(vario_data) <- ~lon+lat # This line is a commented alternative to convert a data frame into a spdf object using the specified coordinates.
 
-vg <- variogram(RelativeFrequencyThousand~1, data = spdf, width = 1, cutoff = 300)
-# width seems to limit my analysis, without it makes the vg easier. 
+# Calculate the experimental variogram for 'RelativeFrequencyThousand' with a lag width of 1 and a cutoff distance of 300.
+vg <- variogram(RelativeFrequencyThousand ~ 1, 
+                data = spdf, 
+                width = 1, 
+                cutoff = 300)
+# Note: The width parameter may limit the analysis; removing it can provide a smoother variogram.
 
-vg_fit <- fit.variogram(vg, vgm("Exp")) 
+# Fit a variogram model to the experimental variogram using an exponential model.
+vg_fit <- fit.variogram(vg, vgm("Exp"))
+
+# Plot the experimental variogram and the fitted variogram model together for comparison.
 plot(vg, vg_fit)
 ```
 
 This is the code if I am looking at the proportion (including kriging)
 
-```{r double value / comparison variogram & kriging}
-# for vg and krig
-trial <- merger %>% dplyr::select("lon", "lat", "Proportion") #%>% na.omit()
+```{r double_value_comparison_variogram_kriging}
+# Create a new data frame ('trial') that selects the longitude, latitude, and 'Proportion' columns from the 'merger' data frame.
+trial <- merger %>% 
+  dplyr::select("lon", "lat", "Proportion") # %>% na.omit()
+
+# Extract the 'Proportion' column as a separate variable for analysis.
 data <- trial[3]
+
+# Extract longitude and latitude columns for coordinates.
 coords <- trial[1:2]
-crs <- CRS("+init=epsg:4326") # Different way of setting same CRS
-spdf <- SpatialPointsDataFrame(coords = coords, data = data, proj4string = crs)
+
+# Define the coordinate reference system using EPSG:4326 (WGS 84).
+crs <- CRS("+init=epsg:4326") # Alternative method for defining the same CRS can also be used.
+
+# Create a SpatialPointsDataFrame object, which combines spatial coordinates with associated data.
+spdf <- SpatialPointsDataFrame(coords = coords, 
+                               data = data, 
+                               proj4string = crs)
+
+# Remove duplicate coordinates to ensure unique spatial points in the dataset.
 spdf = spdf[which(!duplicated(spdf@coords)), ]
-vg <- variogram(Proportion~1, data = spdf, width = 1, cutoff = 300)
-vg_fit <- fit.variogram(vg, vgm("Exp")) 
-krig_comp_1 <- krige(Proportion~1, locations = spdf, newdata = sp_grid_sf_small, model = vg_fit)
-krig_comp_2 <- krige(var1.pred~1, locations = krig_comp_1, newdata = sp_grid_sf, model = vg_fit)
+
+# Calculate the experimental variogram for 'Proportion' with a lag width of 1 and a cutoff distance of 300.
+vg <- variogram(Proportion ~ 1, 
+                data = spdf, 
+                width = 1, 
+                cutoff = 300)
+
+# Fit a variogram model to the experimental variogram using an exponential model.
+vg_fit <- fit.variogram(vg, vgm("Exp"))
+
+# Perform ordinary kriging to estimate 'Proportion' at new locations defined in 'sp_grid_sf_small'.
+# The fitted variogram model is used for the kriging process.
+krig_comp_1 <- krige(Proportion ~ 1, 
+                     locations = spdf, 
+                     newdata = sp_grid_sf_small, 
+                     model = vg_fit)
+
+# Perform a second round of kriging to estimate 'var1.pred' at new locations defined in 'sp_grid_sf'.
+# This step uses the output of the first kriging ('krig_comp_1') as input locations.
+krig_comp_2 <- krige(var1.pred ~ 1, 
+                     locations = krig_comp_1, 
+                     newdata = sp_grid_sf, 
+                     model = vg_fit)
 ```
 
 
@@ -287,102 +496,269 @@ Similar to the variogram, I pass the variable I am interested in, Frequency, as 
 
 
 ```{r kriging}
-krig1 <- krige(RelativeFrequencyThousand~1, 
-               locations = spdf, 
-               newdata = sp_grid_sf, 
-               model = vg_fit)
+# Perform ordinary kriging to predict the 'RelativeFrequencyThousand' values at new locations defined in 'sp_grid_sf'.
+krig1 <- krige(RelativeFrequencyThousand ~ 1, 
+               locations = spdf,        # The spatial points dataframe containing the observed data.
+               newdata = sp_grid_sf,   # The grid or spatial object where predictions will be made.
+               model = vg_fit)         # The fitted variogram model used for the kriging process.
 ```
 
 I can also run the kriging twice, to smooth out the data more. For this, I first run the kriging on a small grid, like 50-500 cells. Then I use that and input it into a second kriging.
 
 ```{r smoothing and kriging}
+# Perform ordinary kriging to predict the 'RelativeFrequencyThousand' values at new locations defined in 'sp_grid_sf'.
 krig1 <- krige(RelativeFrequencyThousand~1, 
-               locations = spdf, 
-               newdata = sp_grid_sf_small, 
-               model = vg_fit)
+               locations = spdf, # The spatial points dataframe containing the observed data.
+               newdata = sp_grid_sf_small, # The grid or spatial object where predictions will be made.
+               model = vg_fit) # The fitted variogram model used for the kriging process.
 
+# Perform ordinary kriging to predict the kriged values at new locations defined in 'sp_grid_sf'.
 krig2 <- krige(var1.pred~1, 
-               locations = krig1, 
-               newdata = sp_grid_sf, 
-               model = vg_fit)
+               locations = krig1, # The spatial points dataframe containing the observed data.
+               newdata = sp_grid_sf, # The grid or spatial object where predictions will be made.
+               model = vg_fit) # The fitted variogram model used for the kriging process.
 ```
 
 
 ### Plotting kriging / point plots
 
 As the last step I can then make a pretty map based on the kriging. First I set up the legend text.
-```{r legend text single plot}
-legend_max <- round(max(krig3$var1.pred), digits = 2)
-legend_min <- round(min(krig3$var1.pred), digits = 2)
+```{r legend_text_single}
+# Calculate the maximum value of the predicted variable 'var1.pred' from the krig3 data frame.
+# The result is rounded to two decimal places for clarity and ease of interpretation.
+legend_max <- round(max(krig3$var1.pred), 
+                    digits = 2)
+
+# Calculate the minimum value of the predicted variable 'var1.pred' from the krig3 data frame.
+# The result is also rounded to two decimal places for clarity and consistency.
+legend_min <- round(min(krig3$var1.pred), 
+                    digits = 2)
 ```
 
-```{r optional text annotation}
+```{r optional_text_annotation}
 # Top:
-annotate(geom="text", x = 11, y = 55.5, label="Diese Karte zeigt das Verteilung des Wortes “bummeln” \nin Deutschland, Österreich und der Schweiz. \nStärker gefärbte Regionen nutzen das Wort mehr.", size = 2, family = "Optima") 
-annotate(geom="text", x = 11, y = 55.5, label="Diese Karte zeigt das Verhältnis zwischen “schau” und “guck” \nin Deutschland, Österreich und der Schweiz. \nRegionen in lila nutzen mehr “schau” und Regionen in orange nutzen mehr “guck”.", size = 2, family = "Optima")
+# Adding an annotation to the top of the plot with text describing the distribution of the word "bummeln"
+annotate(geom = "text", 
+         x = 11,                      # X-coordinate position for the text
+         y = 55.5,                   # Y-coordinate position for the text
+         label = "Diese Karte zeigt das Verteilung des Wortes “bummeln” \nin Deutschland, Österreich und der Schweiz. \nStärker gefärbte Regionen nutzen das Wort mehr.", 
+         size = 2,                   # Font size of the text
+         family = "Optima")          # Font family for the text
+
+# Adding another annotation to the same position (this might overlap with the previous text)
+annotate(geom = "text", 
+         x = 11, 
+         y = 55.5,                   # Same Y-coordinate as above; could cause overlap
+         label = "Diese Karte zeigt das Verhältnis zwischen “schau” und “guck” \nin Deutschland, Österreich und der Schweiz. \nRegionen in lila nutzen mehr “schau” und Regionen in orange nutzen mehr “guck”.", 
+         size = 2, 
+         family = "Optima")
+
 # Bottom:
 # NB: Needs adjusting of legend points!! Use 51.1 and 52.2 for heights - -0.2
-annotate(geom="text", x = 11, y = 45.2, label="Daten aus der App Jodel im Zeitraum April - Juni 2017\n21 Mio. Posts gesammelt von Hovy & Purschke 2018\nKriging der relativen Häufigkeiten", size = 2, family = "Optima") 
+# Adding an annotation to the bottom of the plot to provide context about the data source and collection
+annotate(geom = "text", 
+         x = 11, 
+         y = 45.2,                   # Y-coordinate for the bottom annotation, positioned lower on the plot
+         label = "Daten aus der App Jodel im Zeitraum April - Juni 2017\n21 Mio. Posts gesammelt von Hovy & Purschke 2018\nKriging der relativen Häufigkeiten", 
+         size = 2, 
+         family = "Optima")          # Font family for the text
 ```
 
 
 
-```{r light mode plot cont fill purple}
+```{r light_mode_plot_cont_fill_purple}
+# Start the ggplot object to create a spatial visualization
 ggplot() +
-  geom_sf(data = krig3, aes(fill=var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
-  geom_sf(data = gsa_plot, aes(geometry = geometry), color="black", fill=NA, size = 0.5) +
-  geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, family = "Optima") +
-  geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4) +
+  
+  # Add the spatial features from 'krig3' with a continuous fill based on predicted values
+  geom_sf(data = krig3, 
+          aes(fill = var1.pred), 
+          shape = 21, 
+          size = 0.5, 
+          stroke = 0, 
+          lwd = 0) +
+  # Overlay the geographic boundaries from 'gsa_plot' in black with no fill
+  geom_sf(data = gsa_plot, 
+          aes(geometry = geometry), 
+          color = "black", 
+          fill = NA, 
+          size = 0.5) +
+  
+  # Add text labels for the cities from 'cities_sf' with specified nudging for better placement
+  geom_sf_text(data = cities_sf, 
+               aes(label = City), 
+               size = 2.5, 
+               nudge_x = 0, 
+               nudge_y = -0.15, 
+               family = "Optima") +
+  # Add the city geometries with a different shape (crosses) to indicate their locations
+  geom_sf(data = cities_sf, 
+          aes(geometry = geometry), 
+          shape = 4) +
+  
+  # Use a minimal theme for a clean visual appearance
   theme_minimal() +
-  scale_fill_continuous(low="#ffffff", high="#310d59", name = "Mehr 'nicht'", labels = NULL) +
+  
+  # Define a continuous fill scale with a gradient from white to dark purple, labeled as "Mehr 'nicht'"
+  scale_fill_continuous(low = "#ffffff", 
+                        high = "#310d59", 
+                        name = "Mehr 'nicht'", 
+                        labels = NULL) +
+  
+  # Remove axis titles and text for a cleaner look
   theme(axis.title.x = element_blank(), 
         axis.title.y = element_blank(),
         axis.text.x = element_blank(),
         axis.text.y = element_blank(),
         panel.grid.major = element_blank()) +
+  
+  # Customize the legend's position and appearance
   theme(legend.position = c(0.90, 0.65), 
-        legend.title = element_text(size= 6, family = "Optima"), 
-        legend.text = element_text(size = 6, family = "Optima", hjust = 1),
+        legend.title = element_text(size = 6, 
+                                    family = "Optima"), 
+        legend.text = element_text(size = 6, 
+                                   family = "Optima", 
+                                   hjust = 1),
         legend.title.align = 0,
         legend.key.size = unit(0.3, "cm"),
-        legend.key.width = unit(0.4,"cm")) +
-  annotate(geom="text", x = 16.6, y = 52.4, label=legend_max, size = 1.5, family = "Optima") +
-  annotate(geom="text", x = 16.6, y = 51.3, label=legend_min, size = 1.5, family = "Optima") +
-  annotate(geom="text", x = 16.2, y = 49.8, label="danaroemling.com", size = 2,5, family = "Optima") +
-  annotate(geom="text", x = 16.2, y = 49.6, label="03/04/2023", size = 2,5, family = "Optima")
+        legend.key.width = unit(0.4, "cm")) +
+  
+  # Annotate the plot with maximum predicted value
+  annotate(geom = "text", 
+           x = 16.6, 
+           y = 52.4, 
+           label = legend_max, 
+           size = 1.5, 
+           family = "Optima") +
+  # Annotate the plot with minimum predicted value
+  annotate(geom = "text", 
+           x = 16.6, 
+           y = 51.3, 
+           label = legend_min, 
+           size = 1.5, 
+           family = "Optima") +
+  
+  # Add website annotation at specified coordinates for attribution
+  annotate(geom = "text", 
+           x = 16.2, 
+           y = 49.8, 
+           label = "danaroemling.com", 
+           size = 2.5, 
+           family = "Optima") +
+  # Add date annotation for context
+  annotate(geom = "text", 
+           x = 16.2, 
+           y = 49.6, 
+           label = "03/04/2023", 
+           size = 2.5, 
+           family = "Optima")
 ```
 
-```{r light mode plot 7 bands purple}
+```{r light_mode_plot_7_bands_purple}
+# Define a custom color palette for the fill aesthetic
 pal_light_1 <- c("#ffffff", "#dcd3e2", "#b9a8c5", "#977fa9",  "#75588e", "#533373", "#310d59")
+
+# Start the ggplot object for creating a spatial visualization
 ggplot() +
-  geom_sf(data = krig1, aes(fill=var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
-  geom_sf(data = gsa_plot, aes(geometry = geometry), color="black", fill=NA, size = 0.5) +
-  geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, family = "Optima") +
-  geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4) +
+  
+  # Add spatial features from 'krig1', filling based on predicted values
+  geom_sf(data = krig1, 
+          aes(fill = var1.pred), 
+          shape = 21, 
+          size = 0.5, 
+          stroke = 0, 
+          lwd = 0) +
+  
+  # Overlay geographic boundaries from 'gsa_plot' in black with no fill
+  geom_sf(data = gsa_plot, 
+          aes(geometry = geometry), 
+          color = "black", 
+          fill = NA, 
+          size = 0.5) +
+  
+  # Add text labels for cities from 'cities_sf', nudging them slightly down for better visibility
+  geom_sf_text(data = cities_sf, 
+               aes(label = City), 
+               size = 2.5, 
+               nudge_x = 0, 
+               nudge_y = -0.15, 
+               family = "Optima") +
+  
+  # Add city geometries with a specific shape (crosses) to indicate their locations
+  geom_sf(data = cities_sf, 
+          aes(geometry = geometry), 
+          shape = 4) +
+  
+  # Use a minimal theme for a clean and simple appearance
   theme_minimal() +
+  
+  # Define a continuous fill scale using the custom color palette
   scale_fill_stepsn(colours = pal_light_1, 
-                    breaks = seq(min(krig3$var1.pred), max(krig3$var1.pred), length = 8),
-                    values = seq(0.5/14, 13/14, length = 7),
-                    labels = NULL) +
+                    breaks = seq(min(krig3$var1.pred), 
+                                 max(krig3$var1.pred), 
+                                 length = 8), # Breaks for the fill scale
+                    values = seq(0.5/14, 
+                                 13/14, 
+                                 length = 7), # Values for the relative positions of colors in the gradient
+                    labels = NULL) + # No labels for the fill scale
+  
+  # Remove axis titles and text for a cleaner visual
   theme(axis.title.x = element_blank(), 
         axis.title.y = element_blank(),
         axis.text.x = element_blank(),
         axis.text.y = element_blank(),
         panel.grid.major = element_blank()) +
+  
+  # Customize the legend's position and appearance
   theme(legend.position = c(0.90, 0.65), 
-        legend.title = element_text(size = 6, family = "Optima"), 
-        legend.text = element_text(size = 6, family = "Optima", hjust = 1),
+        legend.title = element_text(size = 6, 
+                                    family = "Optima"), 
+        legend.text = element_text(size = 6, 
+                                   family = "Optima", 
+                                   hjust = 1),
         legend.title.align = 0,
         legend.key.size = unit(0.3, "cm"),
-        legend.key.width = unit(0.4,"cm")) +
-  annotate(geom="text", x = 16.6, y = 52.4, label=legend_max, size = 1.5, family = "Optima") +
-  annotate(geom="text", x = 16.6, y = 51.3, label=legend_min, size = 1.5, family = "Optima") +
-  annotate(geom="text", x = 16.2, y = 49.8, label="danaroemling.com", size = 2.5, family = "Optima") +
-  annotate(geom="text", x = 16.2, y = 49.6, label="03/04/2023", size = 2.5, family = "Optima") +
+        legend.key.width = unit(0.4, "cm")) +
+  
+  # Annotate the plot with the maximum predicted value
+  annotate(geom = "text", 
+           x = 16.6, 
+           y = 52.4, 
+           label = legend_max, 
+           size = 1.5, 
+           family = "Optima") +
+  
+  # Annotate the plot with the minimum predicted value
+  annotate(geom = "text", 
+           x = 16.6, 
+           y = 51.3, 
+           label = legend_min, 
+           size = 1.5, 
+           family = "Optima") +
+  
+  # Add website annotation for attribution at specified coordinates
+  annotate(geom = "text", 
+           x = 16.2, 
+           y = 49.8, 
+           label = "danaroemling.com", 
+           size = 2.5, 
+           family = "Optima") +
+  
+  # Add date annotation for context
+  annotate(geom = "text", 
+           x = 16.2, 
+           y = 49.6, 
+           label = "03/04/2023", 
+           size = 2.5, 
+           family = "Optima") +
+  
+  # Add a label for the fill legend
   labs(fill = "Mehr 'nichts'")
 ```
 
-```{r dark mode plot cont fill green}
+(NB: As plot elements remain same, remaining plots are not commented)
+
+```{r dark_mode_plot_cont_fill_green}
 ggplot() +
   geom_sf(data = krig1, aes(fill = var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
   geom_sf(data = gsa_plot, aes(geometry = geometry), color = "snow2", fill = NA, size = 0.5) +
@@ -413,7 +789,7 @@ ggplot() +
            label="28/02/2023", size = 2.5, color = "snow", family = "Optima")
 ```
 
-```{r dark mode plot 7 bands green}
+```{r dark_mode_plot_7_bands_green}
 pal_new_green <- c("#1b1b1b", "#2b3b33", "#3a5e4d", "#498468", "#57ab85", "#65d4a3", "#73ffc2")
 ggplot() +
   geom_sf(data = krig3, aes(fill = var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
@@ -449,7 +825,7 @@ ggplot() +
   labs(fill = "Mehr 'nichts'") 
 ```
 
-```{r dark mode isogloss plot green}
+```{r dark_mode_isogloss_plot_green}
 summary(krig3$var1.pred)
 ggplot() +
   geom_sf(data = krig3, aes(fill = var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
@@ -483,7 +859,7 @@ ggplot() +
   labs(fill = "Mehr 'nichts'")
 ```
 
-```{r light mode plot N bands purple}
+```{r light_mode_plot_N_bands_purple}
 ggplot() +
   geom_sf(data = krig1, aes(fill=var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
   geom_sf(data = gsa_plot, aes(geometry = geometry), color="black", fill=NA, size = 0.5) +
@@ -509,7 +885,7 @@ ggplot() +
   labs(fill = "Mehr 'nichts'") 
 ```
 
-```{r dark mode plot N bands green}
+```{r dark_mode_plot_N_bands_green}
 # Change the number of n.breaks = to adjust number of break points
 ggplot() +
   geom_sf(data = krig3, aes(fill = var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
@@ -544,7 +920,7 @@ ggplot() +
 
 This code is probably not used, but just in case I can also do quantile breaks instead of equal breaks.
 
-```{r plot dark mode quantile breaks}
+```{r plot_dark_mode_quantile_breaks}
 # class intervals
 quantiles <- classIntervals(krig1$var1.pred, 
                               n = 5, 
@@ -591,14 +967,16 @@ ggplot() +
   labs(fill = "Mehr 'nichts'")
 ```
 
-I can also map kriged comparisons. In theory, the tipping point for the proportion in these maps is at 50% or 0.5. 
+### Comparison
 
-```{r legend text comparison plot}
+I can also map kriged comparisons. The tipping point for the proportion in these maps is at 50% or 0.5. 
+
+```{r legend_text_comparison_plot}
 legend_max_c <- round(max(krig_comp_2$var1.pred), digits = 2)
 legend_min_c <- round(min(krig_comp_2$var1.pred), digits = 2)
 ```
 
-```{r light mode comparison orange purple}
+```{r light_mode_comparison_orange_purple}
 summary(krig_comp_2$var1.pred)
 ggplot() +
     geom_sf(data = krig_comp_2, aes(fill=var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
@@ -625,7 +1003,7 @@ ggplot() +
     labs(fill = "Schau / Guck")
 ```
 
-```{r light mode comparison orange purple legend w word}
+```{r light_mode_comparison_orange_purple_legend}
 summary(krig_comp_2$var1.pred)
 ggplot() +
     geom_sf(data = krig_comp_2, aes(fill=var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
@@ -652,7 +1030,7 @@ ggplot() +
     labs(fill = "Distribution")
 ```
 
-```{r dark mode comparison green yellow}
+```{r dark_mode_comparison_green_yellow}
 summary(krig_comp_2$var1.pred)
 ggplot() +
     geom_sf(data = krig_comp_2, aes(fill=var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
@@ -681,7 +1059,7 @@ ggplot() +
     labs(fill = "Schau / Guck")
 ```
 
-```{r dark mode comparison green yellow legend w word}
+```{r dark_mode_comparison_green_yellow_legend}
 summary(krig_comp_2$var1.pred)
 ggplot() +
     geom_sf(data = krig_comp_2, aes(fill=var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
@@ -714,29 +1092,74 @@ ggplot() +
 There are then two ways of outputting files. Either the normal ggsave or if I need the better versions, I should export as tiff.
 
 ```{r saving}
+# Save the current plot as a PNG file with specified dimensions
 ggsave("./output/3.png", width = 6.5, height = 5.5)
 
-or
+# Alternatively, create a TIFF file for higher resolution output
+tiff("4.tiff", units = "in", width = 9, height = 9, res = 300)
 
-tiff("4.tiff", units="in", width=9, height=9, res=300)
-# insert ggplot code
+# Insert the ggplot code to generate the visualization
 ggplot() +
-  geom_sf(data = krig1, aes(fill=var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
-  geom_sf(data = gsa_plot, aes(geometry = geometry), color="black", fill=NA, size = 0.5) +
-  geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15) +
-  geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4) +
+  
+  # Add spatial features from 'krig1', filling based on predicted values
+  geom_sf(data = krig1, 
+          aes(fill = var1.pred), 
+          shape = 21, 
+          size = 0.5, 
+          stroke = 0, 
+          lwd = 0) +
+  
+  # Overlay geographic boundaries from 'gsa_plot' in black with no fill
+  geom_sf(data = gsa_plot, 
+          aes(geometry = geometry), 
+          color = "black", 
+          fill = NA, 
+          size = 0.5) +
+  
+  # Add city labels from 'cities_sf', nudging them slightly down for visibility
+  geom_sf_text(data = cities_sf, 
+               aes(label = City), 
+               size = 2.5, 
+               nudge_x = 0, 
+               nudge_y = -0.15) +
+  
+  # Add city geometries with a specific shape (crosses) to indicate their locations
+  geom_sf(data = cities_sf, 
+          aes(geometry = geometry), 
+          shape = 4) +
+  
+  # Use a minimal theme for a clean and simple appearance
   theme_minimal() +
-  #scale_colour_gradientn(colours = c("blue", "white","red")) +
-  scale_fill_continuous(low="white", high="dodgerblue4", name = "Variable") +
-  #scale_fill_continuous(low="white", high="darkseagreen4") +
-  #scale_fill_continuous(low="darkseagreen1", high="black") +
+  
+  # Define a continuous fill scale, transitioning from white to dodger blue
+  scale_fill_continuous(low = "white", 
+                        high = "dodgerblue4", 
+                        name = "Variable") +
+  
+  # Additional scale options commented out, can be used to change color schemes
+  # scale_colour_gradientn(colours = c("blue", "white", "red")) +
+  # scale_fill_continuous(low = "white", high = "darkseagreen4") +
+  # scale_fill_continuous(low = "darkseagreen1", high = "black") +
+  
+  # Remove axis titles and text for a cleaner visual
   theme(axis.title.x = element_blank(), 
         axis.title.y = element_blank(),
         axis.text.x = element_blank(),
         axis.text.y = element_blank(),
         panel.grid.major = element_blank()) +
-  theme(legend.position = c(0.95, 0.65), legend.title = element_text(size=10), legend.title.align = 0) +
-  annotate(geom="text", x = 16.2, y = 49.8, label="danaroemling.com", size=2.3)
+  
+  # Customize the legend's position and appearance
+  theme(legend.position = c(0.95, 0.65), 
+        legend.title = element_text(size = 10), 
+        legend.title.align = 0) +
+  
+  # Add a text annotation for attribution at specified coordinates
+  annotate(geom = "text", 
+           x = 16.2, 
+           y = 49.8, 
+           label = "danaroemling.com", 
+           size = 2.3)
 
+# Finish and close the TIFF device
 dev.off()
 ```

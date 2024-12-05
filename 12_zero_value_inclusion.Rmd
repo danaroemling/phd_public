@@ -3,6 +3,8 @@ title: "Zero Value Inclusion"
 author: "Dana Roemling"
 date: '2023-07-25'
 output: html_document
+toc: true
+toc_float: true
 ---
 
 ```{r setup, include=FALSE}
@@ -14,53 +16,93 @@ knitr::opts_chunk$set(echo = TRUE)
 So far, when filtering, I have discarded locations with zero value. But since they do tell me something about the location, they should be included from now on, so this RMD reflects the kriging and mapping code including zero. 
 
 ```{r library and setup}
-# libraries
-library(dplyr)
-library(spdep)
-library(sf)
-library(sp)
-library(tidyverse)
-library(gstat)
-library(stringr) 
-library(scales)
-library(classInt)
-library(viridis)
-library(viridisLite)
-library(rnaturalearth)
-library(sfheaders)
+# Load required libraries for data manipulation, spatial data, and mapping
+library(dplyr)         # Data manipulation
+library(spdep)         # Spatial dependencies and spatial autocorrelation
+library(sf)            # Simple features for handling spatial data
+library(sp)            # Spatial data types and functions
+library(tidyverse)     # Data science package collection (ggplot2, dplyr, etc.)
+library(gstat)         # Geostatistics, including kriging functions
+library(stringr)       # String manipulation
+library(scales)        # Scaling functions for data visualization
+library(classInt)      # Classification intervals for choropleth mapping
+library(viridis)       # Color scales for data visualization
+library(viridisLite)   # Lightweight version of viridis
+library(rnaturalearth) # Download and use natural earth map data
+library(sfheaders)     # Functions for manipulating simple features (sf) objects
 
-# data
-longlat <- read.csv(file = './data_maps/gsa_geo_filtered.csv')
-longlat_only <- longlat %>% dplyr::select(lon, lat)
+# Load datasets
+longlat <- read.csv(file = './data_maps/gsa_geo_filtered.csv') 
+# Main geographic data with longitudes and latitudes
+longlat_only <- longlat %>% dplyr::select(lon, lat) 
+# Subset with only longitude and latitude columns
 corpus <- read.csv(file = './data_ling/full_matrix_for_filtering.csv') 
-token_at_location <- read.csv(file = './data_ling/tokens_at_location.csv')
+# Main linguistic dataset
+token_at_location <- read.csv(file = './data_ling/tokens_at_location.csv') 
+# Data on token counts at specific locations
 colnames(token_at_location) <- c("City", "Tokencount") 
-longlat_small <- read.csv(file = './data_maps/gsa_geo_filtered_nosmall22.csv')
-longlat_small <- read.csv(file = './data_maps/gsa_geo_filtered_nosmall85.csv')
+# Rename columns for clarity
+longlat_small <- read.csv(file = './data_maps/gsa_geo_filtered_nosmall22.csv') 
+# Filtered geographic data, excluding smaller cities
+longlat_small <- read.csv(file = './data_maps/gsa_geo_filtered_nosmall85.csv') 
+# Alternative filtered geographic dataset
 
-# set up mapping & kriging
-cities <- data.frame(
+# Set up for mapping and kriging (spatial interpolation)
+cities <- data.frame( # Define major cities with their geographic coordinates
   City = c("Köln", "München", "Wien", "Zürich", "Berlin", "Hamburg"),
   Long = c(6.9578, 11.5755, 16.3731, 8.5417, 13.3833, 10),
   Lat = c(50.9422, 48.1372, 48.2083, 47.3769, 52.5167, 53.55))
-crs2 <- CRS("+init=epsg:4326")
-cities_sf <- st_as_sf(cities, coords = c("Long", "Lat"), crs = crs2)
+crs2 <- CRS("+init=epsg:4326") 
+# Define coordinate reference system (CRS) as WGS84 (EPSG 4326)
+cities_sf <- st_as_sf(cities, 
+                      coords = c("Long", 
+                                 "Lat"), 
+                      crs = crs2) 
+# Convert cities data to sf object for spatial mapping
 
-EU <- st_read(dsn="./data_maps/EU/Try/", layer="NUTS_RG_20M_2021_3035")
-EU <- st_transform(EU, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
-gsa_outline <- ne_countries(country = c("Austria", "Germany", "Switzerland"), returnclass="sf", scale = "large")
-gsa_plot <- gsa_outline %>% dplyr::select(geometry) # just the outlines of the three
-gsa_spatial <- as_Spatial(gsa_plot) # new object as spatial instead of sf
+# Load and transform European Union (EU) spatial boundaries
+EU <- st_read(dsn = "./data_maps/EU/Try/", 
+              layer = "NUTS_RG_20M_2021_3035") 
+# Read EU boundaries shapefile
+EU <- st_transform(EU, 
+                   CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")) 
+# Transform CRS to WGS84
+
+# Extract outlines of Germany, Austria, and Switzerland
+gsa_outline <- ne_countries(country = c("Austria", 
+                                        "Germany", 
+                                        "Switzerland"),
+                            returnclass = "sf", 
+                            scale = "large") # Outline layer
+gsa_plot <- gsa_outline %>% 
+  dplyr::select(geometry) 
+# Select only geometry (outline) for plotting
+gsa_spatial <- as_Spatial(gsa_plot) 
+# Convert sf object to spatial object for use with certain spatial functions
+
+# Create a systematic grid of spatial sampling points over the GSA region
 sp_grid <- as.data.frame(spsample(gsa_spatial,
-                                  n = 100000,
-                                  type = "regular", # systematically aligned sampling
-                                  offset = c(0.5,0.5))) # makes sure grid is the same every time
-sp_grid_sf <- st_as_sf(sp_grid, coords=c("x1","x2"), crs = st_crs(4326))
+                                  n = 100000,          # Number of points in the grid
+                                  type = "regular",    # Regular (systematic) grid sampling
+                                  offset = c(0.5,
+                                             0.5))) # Offset ensures consistent grid placement
+sp_grid_sf <- st_as_sf(sp_grid, 
+                       coords = c("x1",
+                                  "x2"), 
+                       crs = st_crs(4326)) 
+# Convert grid to sf object with WGS84 CRS
+
+# Create a smaller grid with fewer sampling points for quicker testing or visualization
 sp_grid_small <- as.data.frame(spsample(gsa_spatial,
-                                        n = 500,
-                                        type = "regular", # systematically aligned sampling
-                                        offset = c(0.5,0.5))) # makes sure grid is the same every time
-sp_grid_sf_small <- st_as_sf(sp_grid_small, coords=c("x1","x2"), crs = st_crs(4326))
+                                        n = 500,          # Fewer points for a smaller grid
+                                        type = "regular", # Regular grid sampling
+                                        offset = c(0.5,0.5))) 
+# Offset ensures consistent grid placement
+sp_grid_sf_small <- st_as_sf(sp_grid_small, 
+                             coords = c("x1",
+                                      "x2"), 
+                             crs = st_crs(4326)) 
+# Convert to sf object with WGS84 CRS
 ```
 
 ## Data
@@ -68,21 +110,68 @@ sp_grid_sf_small <- st_as_sf(sp_grid_small, coords=c("x1","x2"), crs = st_crs(43
 So, now when I filter, instead of just adding the long lat data in, I add the filtered data to the long lat introducing 0 for unobserved.
 
 ```{r data}
-# get word
-one_word <- corpus %>% filter(word == "danke")
-colnames(one_word) <- c("Token", "City", "Frequency")
+# Extract rows in 'corpus' given WORD.
+one_word <- corpus %>% 
+  filter(word == "adios")
 
-# join to all longlat and introduce 0 for NA
-new_join <- merge(longlat_small, one_word, by.x ="City", by.y = "City", all = TRUE)
-new_join <- new_join %>% dplyr::select("City", "lon", "lat", "Frequency")
+# Rename columns in 'one_word' for clarity: 
+# "Token" for word, "City" for location, "Frequency" for count
+colnames(one_word) <- c("Token", 
+                        "City", 
+                        "Frequency")
+
+# Merge geographic data with the filtered word frequency data
+# 'merge' uses 'City' as the common column in both datasets
+# 'all = TRUE' ensures that all cities in 'longlat_small' are retained, 
+# adding NA for missing data
+new_join <- merge(longlat_small, 
+                  one_word, 
+                  by.x = "City", 
+                  by.y = "City", 
+                  all = TRUE)
+
+# Select only necessary columns: 
+# City, lon, lat, and Frequency for further analysis
+new_join <- new_join %>% 
+  dplyr::select("City", 
+                "lon", 
+                "lat", 
+                "Frequency")
+
+# Replace any NA values in 'Frequency' with 0 
+# to indicate absence of the word in those locations
 new_join[is.na(new_join)] <- 0
 
-# do the relative frequency
-merger <- merge(new_join, token_at_location, by.x ="City", by.y = "City")
-merger$relfreq <- (merger$Frequency/merger$Tokencount)
-merger$relfreq1000 <- (merger$relfreq*1000)
-colnames(merger) <- c("City", "lon", "lat", "Frequency", "TokenCount", "RelativeFrequency", "RelativeFrequencyThousand")
+# Merge 'new_join' with 'token_at_location' to get total token counts per city
+# Joining on "City" to match each city's word frequency and total token count
+merger <- merge(new_join, 
+                token_at_location, 
+                by.x = "City", 
+                by.y = "City")
+
+# Calculate relative frequency by dividing frequency by total token count
+merger$relfreq <- (merger$Frequency / merger$Tokencount)
+
+# Calculate relative frequency per 1,000 tokens for easier interpretation
+merger$relfreq1000 <- (merger$relfreq * 1000)
+
+# Rename columns in 'merger' for better readability
+colnames(merger) <- c("City", 
+                      "lon", 
+                      "lat", 
+                      "Frequency", 
+                      "TokenCount", 
+                      "RelativeFrequency", 
+                      "RelativeFrequencyThousand")
+
+# Display a summary of the token counts per city to inspect distribution 
+# and identify potential filtering threshold
 summary(merger$TokenCount)
+
+# Filter out cities with specific token count 
+# to include only cities with sufficient data
+merger <- merger %>% 
+  dplyr::filter(TokenCount > 441)
 ```
 
 ## Visualisation
@@ -90,55 +179,149 @@ summary(merger$TokenCount)
 Kriging, Variogram and the whole thing
 
 ```{r stats}
-trial <- merger %>% dplyr::select("lon", "lat", "RelativeFrequencyThousand") 
-data <- trial[3]
-coords <- trial[1:2]
-crs <- CRS("+init=epsg:4326") 
-spdf <- SpatialPointsDataFrame(coords      = coords,
-                               data        = data, 
-                               proj4string = crs)
-spdf = spdf[which(!duplicated(spdf@coords)), ]
-vg <- variogram(RelativeFrequencyThousand~1, data = spdf, width = 1, cutoff = 300)
-vg_fit <- fit.variogram(vg, vgm("Exp")) 
+# Select only relevant columns from 'merger' for spatial analysis
+# Columns: longitude, latitude, and relative frequency per thousand tokens
+trial <- merger %>% 
+  dplyr::select("lon", 
+                "lat", 
+                "RelativeFrequencyThousand")
 
+# Extract the 'RelativeFrequencyThousand' column for spatial analysis
+data <- trial[3]
+
+# Extract longitude and latitude columns as coordinates for spatial data
+coords <- trial[1:2]
+
+# Set the coordinate reference system (CRS) 
+# to WGS84 (EPSG 4326) for geographic data
+crs <- CRS("+init=epsg:4326") 
+
+# Create a SpatialPointsDataFrame using the coordinates and data
+# proj4string defines the spatial reference system (WGS84 in this case)
+spdf <- SpatialPointsDataFrame(coords = coords,
+                               data = data, 
+                               proj4string = crs)
+
+# Remove any duplicate points 
+# to ensure unique spatial coordinates for the analysis
+spdf = spdf[which(!duplicated(spdf@coords)), ]
+
+# Compute the sample variogram for 
+# spatial correlation of 'RelativeFrequencyThousand'
+# 'width' defines the bin width for distance classes, 
+# and 'cutoff' is the maximum distance considered
+vg <- variogram(RelativeFrequencyThousand~1, 
+                data = spdf, 
+                width = 1, 
+                cutoff = 300)
+
+# Fit an exponential variogram model to the computed sample variogram
+# 'vgm("Exp")' specifies an exponential model 
+# for the spatial correlation structure
+vg_fit <- fit.variogram(vg, 
+                        vgm("Exp"))
+
+# Perform kriging interpolation with the fitted variogram model 
+# Kriging estimates 'RelativeFrequencyThousand' 
+# for each point in 'sp_grid_sf_small'
 krig2 <- krige(RelativeFrequencyThousand~1, 
                locations = spdf, 
                newdata = sp_grid_sf_small, 
                model = vg_fit)
 
+# Refine kriging results by interpolating from 'krig2' 
+# to the full grid 'sp_grid_sf'
+# This step increases resolution for final predictions using the fitted model
 krig3 <- krige(var1.pred~1, 
                locations = krig2, 
                newdata = sp_grid_sf, 
                model = vg_fit)
+
+# Calculate rounded maximum and minimum values of predictions for legend display
+legend_max <- round(max(krig3$var1.pred), 
+                    digits = 5)
+legend_min <- round(min(krig3$var1.pred), 
+                    digits = 5)
 ```
 
 ## Mapping
 
 ```{r map}
-legend_max <- round(max(krig3$var1.pred), digits = 2)
-legend_min <- round(min(krig3$var1.pred), digits = 2)
-
 ggplot() +
-  geom_sf(data = krig3, aes(fill=var1.pred), shape = 21, size = 1, stroke = 0, lwd = 0) +
-  geom_sf(data = gsa_plot, aes(geometry = geometry), color="black", fill=NA, size = 0.5) +
-  geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, family = "Optima") +
-  geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4) +
+  # Plot a spatial feature layer (krig3) using geom_sf, with a fill color based on 'var1.pred'
+  geom_sf(data = krig3, 
+          aes(fill = var1.pred), 
+          shape = 21, 
+          size = 1, 
+          stroke = 0, 
+          lwd = 0) +
+  
+  # Add another spatial layer (gsa_plot) without fill color, only outlined in black
+  geom_sf(data = gsa_plot, 
+          aes(geometry = geometry), 
+          color = "black", 
+          fill = NA, 
+          size = 0.5) +
+  
+  # Add city labels (City names) from cities_sf dataset, adjusting size, position, and font
+  geom_sf_text(data = cities_sf, 
+               aes(label = City), 
+               size = 2.5, 
+               nudge_x = 0, 
+               nudge_y = -0.15, 
+               family = "Optima") +
+  
+  # Plot cities as points with a specific shape (cross), using city geometries
+  geom_sf(data = cities_sf, 
+          aes(geometry = geometry), 
+          shape = 4) +
+  
+  # Apply a minimal theme for a clean, simple appearance
   theme_minimal() +
-  scale_fill_steps(low="#ffffff", high="#310d59", n.breaks = 30, labels = NULL) +
+  
+  # Use a fill gradient from white to dark purple, with 30 breaks but no labels for each step
+  scale_fill_steps(low = "#ffffff", 
+                   high = "#310d59", 
+                   n.breaks = 30, 
+                   labels = NULL) +
+  
+  # Remove axis titles and text, and remove major grid lines for a cleaner map look
   theme(axis.title.x = element_blank(), 
         axis.title.y = element_blank(),
         axis.text.x = element_blank(),
         axis.text.y = element_blank(),
         panel.grid.major = element_blank()) +
-  theme(legend.position = c(0.90, 0.65), 
-        legend.title = element_text(size = 6, family = "Optima"), 
-        legend.text = element_text(size = 6, family = "Optima", hjust = 1),
+  
+  # Customize legend position and style for title, text, and key size/width
+  theme(legend.position = c(0.90, 
+                            0.65), 
+        legend.title = element_text(size = 8, 
+                                    family = "Optima"), 
+        legend.text = element_text(size = 6, 
+                                   family = "Optima", 
+                                   hjust = 1),
         legend.title.align = 0,
-        legend.key.size = unit(0.3, "cm"),
-        legend.key.width = unit(0.4,"cm")) +
-  annotate(geom="text", x = 16.6, y = 52.4, label=legend_max, size = 1.5, family = "Optima") +
-  annotate(geom="text", x = 16.6, y = 51.3, label=legend_min, size = 1.5, family = "Optima") +
-  annotate(geom="text", x = 16.2, y = 49.8, label="danaroemling.com", size = 2.5, family = "Optima") +
-  annotate(geom="text", x = 16.2, y = 49.6, label="06/12/2023", size = 2.5, family = "Optima") +
-  labs(fill = "Brötchen") 
+        legend.key.size = unit(0.3, 
+                               "cm"),
+        legend.key.width = unit(0.4, 
+                                "cm")) +
+  
+  # Annotate with max legend value at specific coordinates, adjusting text size and font
+  annotate(geom = "text", 
+           x = 17.05,
+           y = 52.35, 
+           label = legend_max, 
+           size = 1.5, 
+           family = "Optima") +
+  
+  # Annotate with min legend value at specific coordinates, adjusting text size and font
+  annotate(geom = "text", 
+           x = 17.05, 
+           y = 51.25, 
+           label = legend_min, 
+           size = 1.5, 
+           family = "Optima") +
+  
+  # Add a legend title for the fill color scale
+  labs(fill = "adios")
 ```

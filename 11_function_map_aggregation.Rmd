@@ -3,6 +3,8 @@ title: "Aggregated Maps Function"
 author: "Dana Roemling"
 date: '2023-07-10'
 output: html_document
+toc: true
+toc_float: true
 ---
 
 ```{r setup, include=FALSE}
@@ -241,12 +243,10 @@ for (word in word_columns) {
 # mean over kriged values multiplied with moran's i
 multiplied_columns <- paste0(word_columns, "_multiplied")
 calculation <- kriged_data %>%
-  dplyr::select(lon, lat, all_of(multiplied_columns)) %>%
-  dplyr::rowwise() %>%
-  dplyr::mutate(mean_val = mean(c_across(multiplied_columns), na.rm = TRUE),
-                median_val = median(c_across(multiplied_columns), na.rm = TRUE),
-                sd_val = sd(c_across(multiplied_columns), na.rm = TRUE)) %>%
-  dplyr::ungroup()
+  dplyr::select(lon, lat, all_of(multiplied_columns))
+calculation$mean_val <- rowMeans(calculation[, multiplied_columns], na.rm = TRUE)
+calculation$median_val <- apply(calculation[, multiplied_columns], 1, median, na.rm = TRUE)
+calculation$sd_val <- apply(calculation[, multiplied_columns], 1, sd, na.rm = TRUE)
 calculation_sf <- st_as_sf(calculation, coords = c("lon", "lat"), crs = crs2)
 
 # outside loop I create the final map

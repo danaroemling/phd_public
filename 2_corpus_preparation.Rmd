@@ -35,7 +35,9 @@ corpus <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/tota
 city_count <- as.data.frame(unique(corpus$City))
 
 # Write the unique city names to a new CSV file with UTF-8 encoding, excluding row names
-write.csv(city_count, "/rds/projects/g/grievej-german-dialect-profiling/city_list.csv", fileEncoding = "UTF-8", row.names = FALSE)
+write.csv(city_count, "/rds/projects/g/grievej-german-dialect-profiling/city_list.csv", 
+          fileEncoding = "UTF-8", 
+          row.names = FALSE)
 ```
 
 
@@ -53,9 +55,12 @@ library(ggmap)   # For geographical mapping and working with Google Maps API
 
 # Read city names from CSV files for Germany, Austria, and Switzerland
 # Specify 'colClasses' as 'character' to ensure all data is read as strings
-ger_cities <- read.csv(file = './data_maps/germany.csv', colClasses = 'character')  # Load German city names
-aus_cities <- read.csv(file = './data_maps/austria.csv', colClasses = 'character')  # Load Austrian city names
-s_cities <- read.csv(file = './data_maps/switzerland.csv', colClasses = 'character')  # Load Swiss city names
+ger_cities <- read.csv(file = './data_maps/germany.csv', 
+                       colClasses = 'character')  # Load German city names
+aus_cities <- read.csv(file = './data_maps/austria.csv', 
+                       colClasses = 'character')  # Load Austrian city names
+s_cities <- read.csv(file = './data_maps/switzerland.csv', 
+                     colClasses = 'character')  # Load Swiss city names
 
 # Register Google API access using the provided API key
 # Replace "XXX" with your actual Google Maps API key for accessing Google services
@@ -67,27 +72,41 @@ Then I call the API and check for every name in the city lists and append the co
 ```{r ggmap 2}
 # Process Switzerland's city names
 # Select only the 'City' column from the Swiss cities dataset and convert it to a data frame
-only_s_city <- s_cities %>% select(City) %>% data.frame(stringsAsFactors = FALSE)
+only_s_city <- s_cities %>% 
+  select(City) %>% 
+  data.frame(stringsAsFactors = FALSE)
 # Geocode the city names to obtain their geographical coordinates (longitude and latitude)
 switzerland_geo <- mutate_geocode(only_s_city, City)
 # Save the geocoded data for Switzerland to a CSV file
-write.csv(switzerland_geo, "switzerland_geo.csv", fileEncoding = "UTF-8", row.names = FALSE)
+write.csv(switzerland_geo, "switzerland_geo.csv", 
+          fileEncoding = "UTF-8", 
+          row.names = FALSE)
 
 # Process Austria's city names
 # Select only the 'City' column from the Austrian cities dataset and convert it to a data frame
-only_a_city <- aus_cities %>% select(City) %>% data.frame(stringsAsFactors = FALSE)
+only_a_city <- aus_cities %>% 
+  select(City) %>% 
+  data.frame(stringsAsFactors = FALSE)
 # Geocode the city names to obtain their geographical coordinates
 austria_geo <- mutate_geocode(only_a_city, City)
 # Save the geocoded data for Austria to a CSV file
-write.csv(austria_geo, "austria_geo.csv", fileEncoding = "UTF-8", row.names = FALSE)
+write.csv(austria_geo, 
+          "austria_geo.csv", 
+          fileEncoding = "UTF-8", 
+          row.names = FALSE)
 
 # Process Germany's city names
 # Select only the 'City' column from the German cities dataset and convert it to a data frame
-only_g_city <- ger_cities %>% select(City) %>% data.frame(stringsAsFactors = FALSE)
+only_g_city <- ger_cities %>% 
+  select(City) %>% 
+  data.frame(stringsAsFactors = FALSE)
 # Geocode the city names to obtain their geographical coordinates
 germany_geo <- mutate_geocode(only_g_city, City)
 # Save the geocoded data for Germany to a CSV file
-write.csv(germany_geo, "germany_geo.csv", fileEncoding = "UTF-8", row.names = FALSE)
+write.csv(germany_geo, 
+          "germany_geo.csv", 
+          fileEncoding = "UTF-8", 
+          row.names = FALSE)
 ```
 
 As a last step the objects were combined into one file and exported. And also a filtered version was created, were coordinates were limited to roughly the GSA to exclude any outlier cities.
@@ -100,23 +119,33 @@ one <- rbind(switzerland_geo, austria_geo)
 two <- rbind(one, germany_geo)
 
 # Save the combined geographical data to a CSV file named "gsa_geo.csv"
-write.csv(two, "gsa_geo.csv", fileEncoding = "UTF-8", row.names = FALSE)
+write.csv(two, 
+          "gsa_geo.csv", 
+          fileEncoding = "UTF-8", 
+          row.names = FALSE)
 
 # Filter the combined data to retain only the coordinates within the specified latitude and longitude ranges
 # Keep only rows where the latitude is less than 55
-filtered_geo <- two %>% dplyr::filter(lat < 55)
+filtered_geo <- two %>% 
+  dplyr::filter(lat < 55)
 
 # Keep only rows where the latitude is greater than 45
-filtered_geo <- filtered_geo %>% dplyr::filter(lat > 45)
+filtered_geo <- filtered_geo %>% 
+  dplyr::filter(lat > 45)
 
 # Keep only rows where the longitude is greater than 4
-filtered_geo <- filtered_geo %>% dplyr::filter(lon > 4)
+filtered_geo <- filtered_geo %>% 
+  dplyr::filter(lon > 4)
 
 # Keep only rows where the longitude is less than 17
-filtered_geo <- filtered_geo %>% dplyr::filter(lon < 17)
+filtered_geo <- filtered_geo %>% 
+  dplyr::filter(lon < 17)
 
 # Save the filtered geographical data to a CSV file named "gsa_geo_filtered.csv"
-write.csv(filtered_geo, "gsa_geo_filtered.csv", fileEncoding = "UTF-8", row.names = FALSE)
+write.csv(filtered_geo, 
+          "gsa_geo_filtered.csv", 
+          fileEncoding = "UTF-8", 
+          row.names = FALSE)
 ```
 
 
@@ -139,11 +168,14 @@ With dplyr's sample function, I sample 70% of the data and save it as train. Thi
 
 ```{r split}
 # Randomly sample 70% of the data for the training set
-train <- corpus %>% dplyr::sample_frac(0.70)
+train <- corpus %>% 
+  dplyr::sample_frac(0.70)
 
 # Create the testing set by using anti_join to exclude the sampled training data
 # This ensures that the test set contains the remaining 30% of the data
-test <- dplyr::anti_join(corpus, train, by = 'id')
+test <- dplyr::anti_join(corpus, 
+                         train, 
+                         by = 'id')
 ```
 
 The last step is to save both files. Note that the test and validation data is still in one file and needs to be split before it can be used.
@@ -151,11 +183,15 @@ The last step is to save both files. Note that the test and validation data is s
 ```{r export}
 # Save the training dataset to a CSV file named "train_70.csv" with UTF-8 encoding
 # and without row names
-write.csv(train, "train_70.csv", fileEncoding = "UTF-8", row.names = FALSE)
+write.csv(train, "train_70.csv", 
+          fileEncoding = "UTF-8", 
+          row.names = FALSE)
 
 # Save the testing dataset to a CSV file named "test_30.csv" with UTF-8 encoding
 # and without row names
-write.csv(test, "test_30.csv", fileEncoding = "UTF-8", row.names = FALSE)
+write.csv(test, "test_30.csv", 
+          fileEncoding = "UTF-8", 
+          row.names = FALSE)
 ```
 
 
@@ -171,11 +207,14 @@ library(tidyverse)         # Includes functions for data manipulation and visual
 library(splitstackshape)   # Provides functions for reshaping and splitting data
 
 # Read the training dataset from the specified CSV file with UTF-8 encoding
-corpus2 <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/train_70.csv', fileEncoding = "UTF-8") 
+corpus2 <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/train_70.csv', 
+                    fileEncoding = "UTF-8") 
 
 # Create a new column 'group' to divide the data into 15 equal groups
 # Each group is assigned sequentially from 1 to 15
-corpus2$group <- rep(1:15, len=nrow(corpus2)) %>% as.numeric()
+corpus2$group <- rep(1:15, 
+                     len=nrow(corpus2)) %>% 
+  as.numeric()
 
 # Subset the original dataset into separate parts based on the 'group' column
 partA <- corpus2 %>% dplyr::filter(group == 1)   # Rows where group is 1
@@ -243,7 +282,9 @@ combined <- do.call("rbind", list(part1, part2, part3, part4, part5, part6,
 
 # Write the combined data frame to a CSV file named "all_of_the_raw_tokens.csv"
 # The file will be encoded in UTF-8 and will not include row names in the output
-write.csv(combined, "all_of_the_raw_tokens.csv", fileEncoding = "UTF-8", row.names = FALSE)
+write.csv(combined, "all_of_the_raw_tokens.csv", 
+          fileEncoding = "UTF-8", 
+          row.names = FALSE)
 ```
 
 
@@ -261,7 +302,8 @@ library(str2str)     # For atomic vector operations
 corpus <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/Archive/all_of_the_raw_tokens.csv')
 
 # Select relevant columns: 'message' and 'location' from the corpus
-working <- corpus %>% select(message, location)
+working <- corpus %>% 
+  select(message, location)
 
 # Remove rows where 'message' is an empty string
 working <- working[!(working$message == ""), ]
@@ -274,7 +316,8 @@ colnames(working) <- c("word", "city")
 
 # Save the cleaned data frame to a new CSV file, with UTF-8 encoding and without row names
 write.csv(working, "/rds/projects/g/grievej-german-dialect-profiling/cleaned_raw_tokens.csv", 
-          fileEncoding = "UTF-8", row.names = FALSE)
+          fileEncoding = "UTF-8", 
+          row.names = FALSE)
 ```
 
 With this I can count. To find the number of types, I check the word column for unique entries. For the number of tokens I check the amount of rows in the corpus. 
@@ -300,17 +343,22 @@ To create a list of the most frequent words, I group the object by word and coun
 ```{r count 2}
 # Calculate the frequency of each word in the corpus and create a data frame
 # with 'word' and their corresponding counts.
-ten_k <- corpus %>% group_by(word) %>% count() 
+ten_k <- corpus %>% 
+  group_by(word) %>% 
+  count() 
 
 # Alternative method to count the occurrences of each word in the corpus
 # and sort them in descending order by frequency.
-frequent_words <- corpus %>% count(word, sort = TRUE)
+frequent_words <- corpus %>% 
+  count(word, 
+        sort = TRUE)
 
 # Write the data frame containing the sorted word counts to a CSV file
 # named 'ordered_top_words.csv'. This file will be saved in the specified
 # directory with UTF-8 encoding and without row names.
 write.csv(frequent_words, "/rds/projects/g/grievej-german-dialect-profiling/ordered_top_words.csv", 
-          fileEncoding = "UTF-8", row.names = FALSE)
+          fileEncoding = "UTF-8", 
+          row.names = FALSE)
 ```
 
 Dplyr allows for other aggregations using the group_by() function:
@@ -321,36 +369,47 @@ Dplyr allows for other aggregations using the group_by() function:
 ```{r count 3}
 # Count the occurrences of each word per city in the corpus
 # The resulting data frame 'locations' contains the city and word counts.
-locations <- corpus %>% group_by(city) %>% count(word)
+locations <- corpus %>% 
+  group_by(city) %>% 
+  count(word)
 
 # Write the word counts per city to a CSV file named 'word_frequencies_at_locations.csv'.
 # This file is saved with UTF-8 encoding and without row names.
 write.csv(locations, "/rds/projects/g/grievej-german-dialect-profiling/word_frequencies_at_locations.csv", 
-          fileEncoding = "UTF-8", row.names = FALSE)
+          fileEncoding = "UTF-8", 
+          row.names = FALSE)
 
 # Count the total number of tokens per city in the corpus
-token_loc <- corpus %>% group_by(city) %>% count()
+token_loc <- corpus %>% 
+  group_by(city) %>% 
+  count()
 
 # Alternative method to aggregate token counts per city using 'aggregate'
 # The resulting data frame 'token_loc_alt' sums up frequencies of words per city.
-token_loc_alt <- aggregate(Frequency ~ City, data = locations, sum)
+token_loc_alt <- aggregate(Frequency ~ City, 
+                           data = locations, 
+                           sum)
 
 # Write the total token counts per city to a CSV file named 'tokens_at_location.csv'.
 # This file is saved with UTF-8 encoding and without row names.
 write.csv(token_loc, "/rds/projects/g/grievej-german-dialect-profiling/tokens_at_location.csv", 
-          fileEncoding = "UTF-8", row.names = FALSE)
+          fileEncoding = "UTF-8", 
+          row.names = FALSE)
 
 # Rename columns of 'locations' data frame for clarity
 colnames(locations) <- c("City", "Word", "Frequency")
 
 # Calculate the number of unique words per city
 # The resulting data frame 'types_loc' contains the city and the count of distinct words.
-types_loc <- locations %>% group_by(City) %>% summarise(count = n_distinct(Word))
+types_loc <- locations %>% 
+  group_by(City) %>% 
+  summarise(count = n_distinct(Word))
 
 # Write the unique word counts per city to a CSV file named 'types_at_location.csv'.
 # This file is saved with UTF-8 encoding and without row names.
 write.csv(types_loc, "/rds/projects/g/grievej-german-dialect-profiling/types_at_location.csv", 
-          fileEncoding = "UTF-8", row.names = FALSE)
+          fileEncoding = "UTF-8", 
+          row.names = FALSE)
 ```
 
 The last step was to create a matrix spanning cities and words from these aggregations. For this, the tokenised and cleaned corpus was grouped by word and counted per city. This gives me a data frame with three columns, word, city and frequency. I can then filter for word of interest.
@@ -358,16 +417,20 @@ The last step was to create a matrix spanning cities and words from these aggreg
 ```{r matrix filter}
 # Group the corpus by 'word' and count the number of cities each word appears in
 # The resulting data frame 'trial' will have words and their corresponding city counts.
-trial <- corpus %>% group_by(word) %>% count(city)
+trial <- corpus %>% 
+  group_by(word) %>% 
+  count(city)
 
 # Write the word-city count matrix to a CSV file named 'full_matrix_for_filtering.csv'.
 # The file is saved with UTF-8 encoding and without row names.
 write.csv(trial, "/rds/projects/g/grievej-german-dialect-profiling/full_matrix_for_filtering.csv", 
-          fileEncoding = "UTF-8", row.names = FALSE)
+          fileEncoding = "UTF-8", 
+          row.names = FALSE)
 
 # Filter the 'trial' data frame to extract information for the word of interest
 # In this case, we are filtering for the word "ich".
-one_word <- trial %>% filter(word == "ich")
+one_word <- trial %>% 
+  filter(word == "ich")
 
 # Rename the columns of the filtered data frame 'one_word' for better clarity
 # The columns are renamed to 'Token', 'City', and 'Frequency' to indicate what each column represents.
@@ -380,7 +443,8 @@ For this, the city list was used. Only the city name column was kept. Both city 
 ```{r matrix creation}
 # Read the filtered city list from a CSV file and select the 'City' column
 # Rename the column to 'Stadt2' for consistency with later operations
-citylist <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/gsa_geo_filtered.csv') %>% select(City)
+citylist <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/gsa_geo_filtered.csv') %>% 
+  select(City)
 colnames(citylist) <- c("Stadt2")
 
 # Read the full matrix of word frequencies across cities from a CSV file
@@ -388,20 +452,30 @@ trial <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/full_
 
 # Read the first 10,000 rows of the ordered top words from a CSV file, selecting only the 'word' column
 # Convert this column into a document-term vector format using the 'd2v' function (assumed to be defined elsewhere)
-ordered_top_words <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/ordered_top_words.csv', nrows = 10000, header = TRUE) %>% select(word) %>% d2v()
+ordered_top_words <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/ordered_top_words.csv', 
+                              nrows = 10000, 
+                              header = TRUE) %>% 
+  select(word) %>% 
+  d2v()
 
 # Loop over each of the top 10,000 words to filter and merge data
 for (value in ordered_top_words) {
   # Filter the 'trial' data frame for the current word and select relevant columns
   # 'temp' now contains the cities and their corresponding frequency for the current word
-  temp <- trial %>% filter(word == value) %>% select(city, n)
+  temp <- trial %>% 
+    filter(word == value) %>% 
+    select(city, n)
   
   # Rename columns of 'temp' for merging purposes: 'Stadt2' for cities and 'Frequency' for counts
   colnames(temp) <- c("Stadt2", "Frequency")
   
   # Merge 'temp' with 'citylist' on the 'Stadt2' column
   # This keeps all cities in 'citylist' while adding frequencies where available
-  citylist <- merge(citylist, temp, by.x = "Stadt2", by.y = "Stadt2", all.x = TRUE)
+  citylist <- merge(citylist, 
+                    temp, 
+                    by.x = "Stadt2", 
+                    by.y = "Stadt2", 
+                    all.x = TRUE)
   
   # Rename the last column of 'citylist' to the current word to indicate its frequency count
   colnames(citylist)[ncol(citylist)] <- value
@@ -409,7 +483,9 @@ for (value in ordered_top_words) {
 
 # Export the final 'citylist' data frame to a CSV file named '10k_matrix.csv'
 # This file will contain the frequencies of the top 10,000 words across various cities
-write.csv(citylist, "/rds/projects/g/grievej-german-dialect-profiling/10k_matrix.csv", fileEncoding = "UTF-8", row.names = FALSE)
+write.csv(citylist, "/rds/projects/g/grievej-german-dialect-profiling/10k_matrix.csv", 
+          fileEncoding = "UTF-8", 
+          row.names = FALSE)
 ```
 
 In a last step the geolocation information was added to the matrix.
@@ -420,7 +496,10 @@ longlat <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/gsa
 
 # Merge the city list containing word frequencies (citylist) with the geographical data (longlat)
 # The merging is done using the "Stadt2" column from citylist and the "City" column from longlat
-merged <- merge(citylist, longlat, by.x ="Stadt2", by.y = "City")
+merged <- merge(citylist, 
+                longlat, 
+                by.x ="Stadt2", 
+                by.y = "City")
 
 # Rename the first column of the merged data frame to "City" for clarity and consistency
 colnames(merged)[1] <- "City"
@@ -428,7 +507,9 @@ colnames(merged)[1] <- "City"
 # Export the merged data frame, which now includes word frequencies and geographical coordinates,
 # to a new CSV file named '10k_matrix_geo.csv' with UTF-8 encoding
 # The row names are excluded from the output file
-write.csv(merged, "/rds/projects/g/grievej-german-dialect-profiling/10k_matrix_geo.csv", fileEncoding = "UTF-8", row.names = FALSE)
+write.csv(merged, "/rds/projects/g/grievej-german-dialect-profiling/10k_matrix_geo.csv", 
+          fileEncoding = "UTF-8", 
+          row.names = FALSE)
 ```
 
 

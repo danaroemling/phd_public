@@ -11,6 +11,13 @@ toc_float: true
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+## In this RMD
+
+1. Bash commands to handle and split up json
+2. Unnesting the child posts
+3. Combining all the unnested corpus parts into one
+
+
 ## PhD Corpus Extraction and Preparation
 
 In this markdown I will summarise all the steps needed to prepare the original corpus obtained from C. Purschke (cf. Hovy & Purschke, 2018). Not all steps will run in the markdown, but all necessary code will be documented. 

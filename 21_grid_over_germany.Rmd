@@ -1,0 +1,534 @@
+---
+title: "Grids Over Germany"
+author: "Dana Roemling"
+date: "2024-10-21"
+output: html_document
+toc: true
+toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Grids for Evaluation
+
+In order to evaluate how well the algorithm is performing, I want to overlay Germany with a grid that has gradually decreasing cell sizes to see how accuracy for prediction changes. 
+
+```{r libraries_setup}
+# Spatial Data Libraries
+library(sf)          # Modern package for handling vector geospatial data (points, lines, polygons).
+library(sp)          # Older spatial data package, still used in some legacy code.
+library(rworldmap)   # Provides world map data for plotting base maps.
+
+# Data Manipulation and Visualization
+library(tidyverse)   
+# Collection of data manipulation and visualization packages (includes ggplot2, dplyr, etc.).
+library(ggplot2)     
+# Visualization package for creating plots, particularly useful for geospatial data.
+library(dplyr)       # Part of the tidyverse, used for efficient data manipulation.
+
+# Visualization Enhancements
+library(RColorBrewer) # Creates color palettes for visualizations that are colorblind-friendly.
+library(scales)       # Helps format data in visualizations (e.g., axes, labels).
+
+# Load in the Europe shapefile
+EU <- st_read(dsn = "data_maps/EU/Try/", 
+              layer = "NUTS_RG_20M_2021_3035")
+
+# Change projection so it's all uniform
+EU <- st_transform(EU, 
+                   CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+
+# Extract only Germany as a whole (not with admin. regions)
+# And store in new object
+ger <- EU %>% filter(NUTS_ID == "DE")
+```
+
+# 4 Cell Grid
+
+```{r 4cells}
+# Create a grid (fishnet) based on the outline stored in the 'ger' object
+fishnet <- st_make_grid(
+  st_transform(ger, crs = st_crs(4326)), # Transform the CRS of 'ger' to WGS84 (longitude/latitude).
+  cellsize = 5,       # Set the size of each grid cell to be 5 units.
+  square = TRUE,      # Ensure that the grid cells are square-shaped.
+  offset = c(0.5, 1)  # Shift the origin of the grid to ensure alignment, starting at longitude 0.5, latitude 1.
+) %>% 
+  st_sf() # Convert the grid to a simple features (sf) object for spatial operations.
+
+# Intersect the fishnet grid with the 'ger' plot to retain only the grid cells that overlap with the region of interest (GSA region)
+grid_ger <- fishnet %>% 
+  st_intersection(ger) # Keep only those cells that fall within the 'ger' boundary.
+
+# Assign a unique ID to each cell in the grid for reference
+grid_ger$cell_id <- 1:nrow(grid_ger) # Create a column called 'cell_id' with sequential numbers for each cell.
+
+# Save the grid with the cell IDs to a shapefile for future use or analysis
+st_write(grid_ger, "4_cell_grid_ger.shp") 
+# Write the resulting grid to a shapefile named "4_cell_grid_ger.shp".
+```
+
+```{r 4plot}
+# Read the shapefile data for the 4-cell grid
+grid_4cell <- st_read(
+  dsn = "/Users/dana/Documents/R/PHD/data_maps/grids/4cell",  
+  # Path to the directory containing the shapefile
+  layer = "4_cell_grid_ger"                                   
+  # Name of the specific shapefile layer to be read
+)
+
+# Calculate centroids of each cell in the grid and add them as a new column in the grid_4cell data
+grid_4cell <- grid_4cell %>%
+  mutate(centroid = st_centroid(geometry)) 
+# Compute the centroid of each cell for text placement later
+
+# Plot the grid and label each cell with its ID
+ggplot() +
+  geom_sf(data = grid_4cell, 
+          aes(geometry = geometry),  # Plot the grid cells using their geometry
+          fill = "white") +          # Set the fill color of the cells to white
+  geom_sf_text(data = grid_4cell, 
+               aes(geometry = centroid, label = cell_id), # Use centroids for label positions
+               size = 3,                                 # Set the text size
+               hjust = 0.5,                              # Center text horizontally within each cell
+               vjust = 0.5                               # Center text vertically within each cell
+  ) +
+  theme_minimal() +  # Use a minimalistic theme to reduce visual clutter
+  theme(
+    axis.title.x = element_blank(),       # Remove x-axis title
+    axis.title.y = element_blank(),       # Remove y-axis title
+    axis.text.x = element_blank(),        # Remove x-axis text (tick labels)
+    axis.text.y = element_blank(),        # Remove y-axis text (tick labels)
+    panel.grid.major = element_blank(),   # Remove major grid lines
+    plot.title = element_text(size = 10, family = "Optima", hjust = 0.5) # Customize title appearance
+  ) +
+  ggtitle("4 Cell Grid")  # Add a title to the plot
+```
+
+## 9 Cell Grid
+
+Annotation same as above, the only changes are made in cellsize and offset. 
+
+```{r 9cell}
+fishnet <- st_make_grid(st_transform(ger, 
+                                    crs=st_crs(4326)), 
+                       cellsize = 3.2,
+                       square = TRUE,
+                       offset = c(-0.6,-2)
+                       ) %>% 
+  st_sf()
+
+grid_ger <- fishnet %>% 
+  st_intersection(ger)
+
+grid_ger$cell_id <- 1:nrow(grid_ger)
+
+st_write(grid_ger, "9_cell_grid_ger.shp")
+```
+
+```{r 9plot}
+grid_9cell <- st_read(dsn = "/Users/dana/Documents/R/PHD/data_maps/grids/9cell", 
+                      layer = "9_cell_grid_ger")
+grid_9cell <- grid_9cell %>%
+  mutate(centroid = st_centroid(geometry))
+
+ggplot() +
+  geom_sf(data = grid_9cell, 
+          aes(geometry = geometry),
+          fill = "white") +
+  geom_sf_text(data = grid_9cell, 
+               aes(geometry = centroid, label = cell_id), 
+               size = 3, 
+               hjust = 0.5, # Center horizontally
+               vjust = 0.5  # Center vertically
+  ) +
+  theme_minimal() +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank(),
+        plot.title = element_text(size = 10, family = "Optima", hjust = 0.5)
+  ) +
+  ggtitle("9 Cell Grid")
+```
+
+## Max Point Analysis for Regular Grid
+
+As previously, we can check if the hotspot of a word or a message falls into one of the cells of the grid. Similar code in rmd 16 and 20.
+
+```{r hotspot_prep}
+# Load necessary libraries
+library(dplyr)          # For data manipulation and pipeline (%>%) operations
+library(spdep)          # For spatial analysis
+library(sf)             # For handling spatial data using simple features
+library(sp)             # For handling spatial data, particularly the older sp objects
+library(tidyverse)      # Includes multiple packages like ggplot2, dplyr, tidyr
+library(gstat)          # For geostatistical modeling and kriging
+library(stringr)        # For string manipulation
+library(rnaturalearth)  # For downloading and using natural Earth map data
+
+# Load kriging data for Germany
+kriged_ger <- read.csv(file = 'data_ling/kriged/kriged_5k_300cutoff_germany.csv', 
+                       header = TRUE)  
+# Read the CSV file containing kriging results into a data frame
+
+# Clean up column names by removing dots and "X" prefixes from column names
+names(kriged_ger) <- gsub("\\.", "", names(kriged_ger))  # Remove all dots from the column names
+names(kriged_ger) <- gsub("\\<X", "", names(kriged_ger)) # Remove "X" prefix from the column names
+
+# Select the first 2002 columns of the kriging data (assuming they are relevant for further analysis)
+kriged_ger <- kriged_ger %>% dplyr::select(1:2002)
+
+# Get the outline of Germany using Natural Earth data with high resolution
+ger_outline <- ne_countries(country = "Germany", 
+                            returnclass = "sf", 
+                            scale = "large")  # Load Germany's map as an sf object
+
+# Extract only the geometry of Germany for plotting purposes
+ger_plot <- ger_outline %>% 
+  dplyr::select(geometry)  # Select only the geometry column from the sf object
+
+# Convert the simple features object to a Spatial object 
+ger_spatial <- as_Spatial(ger_plot)  # Convert sf object to a Spatial object using as_Spatial()
+
+# Create a data frame of major German cities with their coordinates
+cities_ger <- data.frame(
+  City = c("Köln", "München", "Berlin", "Hamburg", "Frankfurt", "Kassel"),  # List of cities
+  Long = c(6.9578, 11.5755, 13.3833, 10, 8.6821, 9.4797),                   # Longitudes 
+  Lat = c(50.9422, 48.1372, 52.5167, 53.55, 50.1109, 51.3127))              # Latitudes 
+
+# Set coordinate reference systems
+crs2 <- st_crs(4326)
+crs3 <- CRS("+init=epsg:4326") 
+
+# Convert the cities data frame to a simple features object (sf), 
+# using the specified coordinate columns
+cities_ger_sf <- st_as_sf(cities_ger, coords = c("Long", "Lat"), crs = crs2)  
+# Create sf object with coordinates and CRS
+
+# Create a systematic grid of points over the spatial extent of Germany for spatial sampling
+sp_grid_ger <- as.data.frame(spsample(ger_spatial,
+                                      n = 100000,           
+                                      # Number of points to sample in the grid
+                                      type = "regular",     
+                                      # Systematic sampling in a regular grid pattern
+                                      offset = c(0.5, 0.5))) 
+                                      # Ensures grid alignment is consistent every time
+
+# Convert the regular grid points into a simple features (sf) object for spatial operations
+sp_grid_ger_sf <- st_as_sf(sp_grid_ger, 
+                           coords = c("x1", "x2"), 
+                           crs = crs2)  # Convert grid points to sf object
+
+# Create a list of German words for analysis
+strings <- tolower(c("aber", "eigentlich", "isses", "mir", "echt", "egal"))  
+                    # Convert words to lowercase 
+
+# Ensure that the list of words contains unique values only (removes duplicates)
+strings <- unique(strings)  # Remove any duplicate words from the list
+```
+
+
+```{r hotspot_prep2}
+# Extract relevant columns (longitude and latitude) from the kriged_ger data frame
+kriged_values_ger <- kriged_ger %>% 
+  select(c("lon", 
+           "lat"))
+
+# Loop through each string in the predefined list of strings
+for (cname in strings) {
+  # Check if the current string exists as a column in the kriged_ger data frame
+  if (cname %in% colnames(kriged_ger)) {
+    # If it exists, convert the column to numeric and add it to kriged_values_ger
+    kriged_values_ger[, paste0(cname)] <- as.numeric(unlist(kriged_ger[, cname]))
+  }
+}
+
+# Create a new list of column names for further operations, excluding 'lon' and 'lat'
+strings <- toString(colnames(kriged_values_ger[3:ncol(kriged_values_ger)])) 
+# Convert column names to a single string
+strings <- trimws(unlist(strsplit(strings, ","))) 
+# Split the string back into a list of names and trim whitespace
+
+# Prepare the data for calculations by removing the 'lon' and 'lat' columns
+data_for_calculations_ger <- kriged_values_ger %>% 
+  select(-lon, -lat)
+
+# Create a new data frame for calculations containing only the coordinates
+calculation_ger <- kriged_values_ger %>% 
+  select(lon, lat)
+
+# Calculate the mean value for each row across the selected columns
+calculation_ger$mean_val <- rowMeans(data_for_calculations_ger)
+
+# Calculate the median value for each row across the selected columns
+calculation_ger$median_val <- apply(data_for_calculations_ger, 
+                                    1, 
+                                    median)
+
+# Calculate the standard deviation for each row across the selected columns
+calculation_ger$sd_val <- apply(data_for_calculations_ger, 
+                                1, 
+                                sd)
+
+# Convert the calculation data frame into a spatial data frame with specified coordinates and coordinate reference system
+calculation_ger_sf <- st_as_sf(calculation_ger, 
+                               coords = c("lon", "lat"), 
+                               crs = crs2)
+
+# Retrieve the maximum mean value, filtering for mean values greater than 0
+mean_pred_ger <- calculation_ger %>% 
+  filter(mean_val > 0) %>%           # Keep only rows where mean_val is greater than 0
+  arrange(desc(mean_val)) %>%        # Sort the data frame in descending order by mean_val
+  slice(1:1) %>%                     # Select the top row (highest mean value)
+  dplyr::select(mean_val, lon, lat)  # Select only the relevant columns for further analysis
+
+# Not needed for point prediction; perform variogram analysis
+data_ger <- calculation_ger["mean_val"]  # Prepare data frame with mean_val for variogram
+coords_ger <- calculation_ger[c("lon", "lat")]  # Prepare data frame with coordinates
+# Create a spatial points data frame with the coordinates and data
+spdf_ger <- SpatialPointsDataFrame(coords = coords_ger,
+                                    data = data_ger, 
+                                    proj4string = crs3)
+
+# Remove duplicate coordinates to avoid issues in variogram calculation
+spdf_ger = spdf_ger[which(!duplicated(spdf_ger@coords)), ]
+
+# Compute the empirical variogram for the mean value
+vg_ger <- variogram(mean_val~1, 
+                    data = spdf_ger, 
+                    width = 1, 
+                    cutoff = 300)
+
+# Fit a variogram model to the empirical variogram
+vg_fit_ger <- fit.variogram(vg_ger, 
+                            vgm("Exp")) 
+
+# Perform Kriging interpolation using the fitted variogram model
+krig_ger <- krige(mean_val~1, 
+                  locations = spdf_ger, 
+                  newdata = sp_grid_ger_sf, 
+                  model = vg_fit_ger)  # Use the variogram model for prediction
+```
+
+This is the actual checking. 
+
+```{r hotspot_check}
+# get data from above
+max_point1 <- mean_pred_ger
+
+# Function to check if the point is within a cell in the grid
+check_grid_region <- function(max_point, grid) {
+  # Create a data frame for the highest point's coordinates
+  max_point_df <- data.frame(
+    longitude = c(max_point$lon),
+    latitude = c(max_point$lat)
+  )
+  
+  # Convert the point to an sf object with the same CRS as the grid
+  point_sf <- st_as_sf(max_point_df, 
+                       coords = c("longitude", "latitude"), 
+                       crs = st_crs(grid))
+  
+  # Ensure that the point's CRS matches the grid object
+  point_sf <- st_transform(point_sf, st_crs(grid))
+  
+  # Check if the point is within any grid cell
+  point_within_cell <- st_contains(grid, point_sf, sparse = FALSE)
+  
+  # Find which grid cell the point is within (if any)
+  cell_index <- which(point_within_cell, arr.ind = TRUE)
+  
+  # Initialize a list to store the results
+  result <- list()
+  
+  # If the point is within a cell, extract the relevant information
+  if (length(cell_index) > 0) {
+    result$cell_id <- grid$cell_id[cell_index[1]]
+    result$other_info <- grid$other_info[cell_index[1]]  # Replace with other relevant columns if needed
+  } else {
+    result$cell_id <- "Outside any cell"
+    result$other_info <- NA
+  }
+  
+  # Print the result
+  print(result)
+  
+  return(result)  # Return the result for further use
+}
+
+# Run the function to check which grid cell the highest point lies in
+grid_result <- check_grid_region(max_point1, grid)
+
+grid_result <- check_grid_region(max_point1, grid_4cell)
+print(grid_result)
+```
+
+
+## Hexagon Grid
+
+Using the same parameters as in the 9 cell grid, changing the cells to hexagons leads the following:
+
+```{r 12hexacell}
+fishnet <- st_make_grid(st_transform(ger, 
+                                    crs=st_crs(4326)), 
+                       cellsize = 3.2,
+                       square = FALSE,
+                       offset = c(-0.6,-2)
+                       ) %>% 
+  st_sf()
+
+grid_ger <- fishnet %>% 
+  st_intersection(ger)
+
+grid_ger$cell_id <- 1:nrow(grid_ger)
+
+st_write(grid_ger, "12_hexa_cell_grid_ger.shp")
+```
+
+```{r 12hexaplot}
+grid_12hexacell <- st_read(dsn = "/Users/dana/Documents/R/PHD/data_maps/grids/12hexacell", 
+                      layer = "12_hexa_cell_grid_ger")
+grid_12hexacell <- grid_12hexacell %>%
+  mutate(centroid = st_centroid(geometry))
+
+ggplot() +
+  geom_sf(data = grid_12hexacell, 
+          aes(geometry = geometry),
+          fill = "white") +
+  geom_sf_text(data = grid_12hexacell, 
+               aes(geometry = centroid, label = cell_id), 
+               size = 3, 
+               hjust = 0.5, # Center horizontally
+               vjust = 0.5  # Center vertically
+  ) +
+  theme_minimal() +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank(),
+        plot.title = element_text(size = 10, family = "Optima", hjust = 0.5)
+  ) +
+  ggtitle("12 Hexa Cell Grid")
+```
+
+
+## Voronoi Grid
+
+Voronoi is meant to be an adaptive grid, so it makes cells smaller where there is more data. 
+
+```{r voronoiprep}
+# Get the token and location data to prepare the dataframe for the voronoi generation
+token_at_location <- read.csv(file = './data_ling/tokens_at_location.csv')
+longlat <- read.csv(file = './data_maps/germany_geo.csv')
+merged_tokens <- merge(token_at_location, longlat, by.x = "city", by.y = "City")
+tokens_filtered <- merged_tokens %>%
+  dplyr::filter(n > 10000) %>%
+  dplyr::filter(lon > 0) %>%
+  na.omit()
+
+# Assume you have a data frame `data_points` with columns `longitude` and `latitude`
+# Convert your data points to an sf object for Voronoi generation
+data_points_sf <- st_as_sf(tokens_filtered, coords = c("lon", "lat"), crs = 4326)
+
+# Generate the Voronoi diagram using these points
+# This is the default one
+voronoi_cells <- st_voronoi(st_union(data_points_sf))
+
+# This changes the size of the cells by adding tolerance
+voronoi_cells <- st_voronoi(st_union(data_points_sf), dTolerance = 4)
+voronoi_cells <- st_voronoi(st_union(data_points_sf), dTolerance = 5)
+voronoi_cells <- st_voronoi(st_union(data_points_sf), dTolerance = 6)
+
+# Convert Voronoi diagram into an sf object for further processing
+voronoi_sf <- st_as_sf(st_cast(voronoi_cells))
+
+# Clip the Voronoi cells to the boundary of Germany
+germany_boundary <- st_union(ger)  # Assuming `ger` is the spatial object of Germany
+voronoi_clipped <- st_intersection(voronoi_sf, germany_boundary)
+
+# Add a unique identifier to each Voronoi cell
+voronoi_clipped$cell_id <- seq_len(nrow(voronoi_clipped))
+```
+
+```{r voronoi_plot}
+# Plot the Voronoi diagram overlaid with the German boundary to visualize the cells
+ggplot() +
+  # Plot the clipped Voronoi cells
+  geom_sf(data = voronoi_clipped, fill = "white", color = "black") + 
+  # Plot the original data points
+  geom_sf(data = data_points_sf, color = "plum4", size = 1) + 
+  theme_minimal() +
+  ggtitle("Voronoi Diagram Over Germany") +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank(),
+        plot.title = element_text(size = 10, family = "Optima", hjust = 0.5))
+```
+
+```{r voronoi_plot2}
+# Create the plot
+ggplot() +
+  # Plot the clipped Voronoi cells
+  geom_sf(data = voronoi_clipped, fill = "white", color = "black") +
+  geom_sf_text(data = voronoi_clipped, 
+               aes(label = cell_id),  # Use cell_id for labels
+               size = 2,  # Smaller size to reduce clutter
+               check_overlap = TRUE,  # Prevent overlapping labels
+               position = position_nudge(y = 0.02)) +  # Adjust position if necessary
+  theme_minimal() +
+  ggtitle("Voronoi Diagram Over Germany") +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank(),
+        plot.title = element_text(size = 10, family = "Optima", hjust = 0.5))
+```
+
+
+## Max Point Analysis for Regular Grid
+
+```{r voronoi_check}
+# Assuming max_point1 contains the coordinates of interest
+max_point1 <- mean_pred_ger
+
+# Function to check if the point is within a Voronoi cell
+check_voronoi_region <- function(max_point, voronoi_grid) {
+  # Create a data frame for the point's coordinates
+  max_point_df <- data.frame(
+    longitude = c(max_point$lon),
+    latitude = c(max_point$lat)
+  )
+  
+  # Convert to an sf object
+  point_sf <- st_as_sf(max_point_df, coords = c("longitude", "latitude"), crs = st_crs(voronoi_grid))
+  
+  # Check if the point is within any Voronoi cell
+  point_within_cell <- st_contains(voronoi_grid, point_sf, sparse = FALSE)
+  
+  # Find which cell the point is within
+  cell_index <- which(point_within_cell, arr.ind = TRUE)
+  
+  # Initialize result list
+  result <- list()
+  
+  if (length(cell_index) > 0) {
+    result$cell_id <- voronoi_grid$cell_id[cell_index[1]]  # Get the cell ID
+  } else {
+    result$cell_id <- "Outside any cell"
+  }
+  
+  print(result)  # Print result for inspection
+  return(result)  # Return the result
+}
+
+# Check which Voronoi cell the point lies in
+grid_result <- check_voronoi_region(max_point1, voronoi_clipped)
+print(grid_result)
+```

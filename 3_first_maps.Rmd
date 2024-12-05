@@ -11,6 +11,20 @@ toc_float: true
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+## In this RMD
+
+1. Regex function to count occurrences in corpus (both single and double)
+2. Merge with coordinates
+3. Get coordinates for underlying map
+4. Plot the counts single and double
+    - mapping_double_light
+    - mapping_double_darkmode
+    - mapping_double_lightmode_updated
+    - mapping_single_darkmode
+    - mapping_single_light
+5. Exporting maps
+
+
 ## First Maps
 
 In this markdown I will summarise everything that is needed to create the GSA map, to plot data points onto it and to count instances of words per location in the corpus. I start by loading all necessary libraries and reading in the csv file for the corpus.
@@ -225,7 +239,7 @@ gsa_spatial <- as_Spatial(gsa_plot) # new object as spatial instead of sf
 The next step then is the mapping of the coordinates with their counts using ggplot2. First, I take the GSA coordinates and create a blank map. I define which range of coordinates gets shown (coord_map) and set the theme to minimal. I then tell ggplot to use the merger data and plot points on my blank map using coordinates. The colour of the points is based on the proportion of use of the first (or main) word in the count. City labels can be added. scale_color_gradient colours the gradient of the proportion (and the points). Different color filling is needed for categorical data. Labs sets the title of the legend. ggtitle sets the title of the whole plot. The last theme element gets rid of grid lines and marks on the axis, including axis title.
 This is the map for variant / proportion mapping.
 
-```{r mapping_double}
+```{r mapping_double_light}
 # Begin creating a ggplot object
 ggplot() + 
 
@@ -434,7 +448,7 @@ ggplot() +
         panel.grid.major = element_blank())        # Remove major grid lines
 ```
 
-```{r mapping_single}
+```{r mapping_single_light}
 # Start creating a ggplot object
 ggplot() + 
   

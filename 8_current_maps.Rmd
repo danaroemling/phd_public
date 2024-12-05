@@ -16,6 +16,7 @@ library(tidyverse)
 library(gstat)
 library(stringr) # regex
 library(dplyr) # regex
+library(tidyr)
 library(scales)
 library(classInt)
 library(viridis)
@@ -29,7 +30,7 @@ token_at_location <- read.csv(file = './data_ling/tokens_at_location.csv')
 colnames(token_at_location) <- c("City", "Tokencount") 
 longlat <- read.csv(file = './data_maps/gsa_geo_filtered.csv')
 longlat_small <- read.csv(file = './data_maps/gsa_geo_filtered_nosmall22.csv')
-#longlat_small <- read.csv(file = './data_maps/gsa_geo_filtered_nosmall85.csv')
+longlat_small <- read.csv(file = './data_maps/gsa_geo_filtered_nosmall85.csv')
 
 # data on server
 corpus <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/full_matrix_for_filtering.csv') 
@@ -92,25 +93,35 @@ gsa_spatial <- as_Spatial(gsa_plot) # new object as spatial instead of sf
 
 ```{r counting / regex}
 #get word of interest
-one_word <- corpus %>% filter(word == "autobahn")
+one_word <- corpus %>% filter(word == "mistkübel")
 colnames(one_word) <- c("Token", "City", "Frequency")
 
 #merge with geo data
 merger_one <- merge(one_word, longlat, by.x ="City", by.y = "City")
 colnames(merger_one) <- c("City", "Token", "Frequency", "lon", "lat")
+merger <- merge(merger_one, token_at_location, by.x ="City", by.y = "City")
+
+# OR
+# zero inclusion
+new_join <- merge(longlat_small, one_word, by.x ="City", by.y = "City", all = TRUE)
+new_join <- new_join %>% dplyr::select("City", "lon", "lat", "Frequency")
+new_join <- new_join %>% drop_na(lon)
+new_join[is.na(new_join)] <- 0
+merger <- merge(new_join, token_at_location, by.x ="City", by.y = "City", all.x = TRUE)
+
 
 # add relative frequency
-merger <- merge(merger_one, token_at_location, by.x ="City", by.y = "City")
 merger$relfreq <- (merger$Frequency/merger$Tokencount)
 merger$relfreq1000 <- (merger$relfreq*1000)
 colnames(merger) <- c("City", "Token", "Frequency", "lon", "lat", "TokenCount", "RelativeFrequency", "RelativeFrequencyThousand")
+#colnames(merger) <- c("City", "lon", "lat", "Frequency", "TokenCount", "RelativeFrequency", "RelativeFrequencyThousand")
 summary(merger$TokenCount)
-merger <- merger %>% filter(TokenCount > 2100)
+merger <- merger %>% filter(TokenCount > 1456)
 
 # alternations
-one_word <- corpus %>% filter(word == "matura")
+one_word <- corpus %>% filter(word == "abitur")
 colnames(one_word) <- c("Token", "City", "Frequency")
-second_word <- corpus %>% filter(word == "abitur")
+second_word <- corpus %>% filter(word == "matura")
 colnames(second_word) <- c("Token", "City", "Frequency")
 
 # combine into one and calculate proportion
@@ -122,7 +133,7 @@ merged$Proportion <- (merged$Frequency.x / (merged$Frequency.x + merged$Frequenc
 merged$Percentage <- 100* (merged$Frequency.x / (merged$Frequency.x + merged$Frequency.y) )
 
 # merge with geo data
-merger <- merge(merged, longlat_small, by.x ="City", by.y = "City")
+merger <- merge(merged, longlat, by.x ="City", by.y = "City")
 ```
 
 ```{r single value variogram}
@@ -205,7 +216,7 @@ ggplot() +
   geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, family = "Optima") +
   geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4) +
   theme_minimal() +
-  scale_fill_continuous(low="#ffffff", high="#310d59", name = "Mehr 'nicht'", labels = NULL) +
+  scale_fill_continuous(low="#ffffff", high="#310d59", name = "'nicht'", labels = NULL) +
   theme(axis.title.x = element_blank(), 
         axis.title.y = element_blank(),
         axis.text.x = element_blank(),
@@ -414,9 +425,67 @@ ggplot() +
 ```
 
 
+```{r dark mode plot N bands red}
+# Change the number of n.breaks = to adjust number of break points
+ggplot() +
+  geom_sf(data = krig2, aes(fill = var1.pred), shape = 21, size = 0.75, stroke = 0, lwd = 0) +
+  geom_sf(data = gsa_plot, aes(geometry = geometry), color = "snow2", fill = NA, size = 0.5) +
+  geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, color = "snow", family = "Optima") +
+  geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4, color = "snow") +
+  theme_minimal() +
+  scale_fill_steps(low="#000000", high="firebrick1", n.breaks = 30, labels = NULL) +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank()) +
+  theme(legend.position = c(0.90, 0.65), 
+        legend.title = element_text(size = 6, color = "snow", family = "Optima"), 
+        legend.text = element_text(size = 6, color = "snow", family = "Optima", hjust = 1),
+        legend.title.align = 0,
+        panel.background = element_rect(fill = "#303030", color = "#303030"),
+        plot.background = element_rect(fill = "#303030", color = "#303030"),
+        legend.key.size = unit(0.3, "cm"),
+        legend.key.width = unit(0.4,"cm")) +
+  annotate(geom="text", x = 16.6, y = 52.4, 
+           label=legend_max, size = 1.5, family = "Optima", color = "snow") +
+  annotate(geom="text", x = 16.6, y = 51.3, 
+           label=legend_min, size = 1.5, family = "Optima", color = "snow") +
+  labs(fill = "More 'aber'")
+```
+
+
+
 ```{r legend text comparison plot}
 legend_max_c <- round(max(krig_comp_2$var1.pred), digits = 2)
 legend_min_c <- round(min(krig_comp_2$var1.pred), digits = 2)
+```
+
+```{r dark mode plot comparison red blue}
+ggplot() +
+    geom_sf(data = krig_comp_2, aes(fill=var1.pred), shape = 21, size = 0.5, stroke = 0, lwd = 0) +
+    geom_sf(data = gsa_plot, aes(geometry = geometry), color = "snow2", fill = NA, size = 0.5) +
+    geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, family = "Optima", color="snow2") +
+    geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4, color="snow2") +
+    theme_minimal() +
+    scale_fill_steps2(low = "blue", mid = "#303030", high = "firebrick1", midpoint = 0.5, n.breaks = 15, labels = NULL) +
+    theme(axis.title.x = element_blank(), 
+          axis.title.y = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_blank(),
+          panel.grid.major = element_blank()) +
+    theme(legend.position = c(0.90, 0.65), 
+          legend.title = element_text(size = 6, family = "Optima", color = "snow"),
+          legend.text = element_text(size = 6, family = "Optima", hjust = 1, color = "snow"),
+          legend.title.align = 0,
+          legend.key.size = unit(0.3, "cm"),
+          legend.key.width = unit(0.4,"cm"),
+          panel.background = element_rect(fill = "#303030", color = "#303030"),
+          plot.background = element_rect(fill = "#303030", color = "#303030"),
+          plot.title = element_text(hjust = 0.5, color = "snow", family = "Optima")) +
+    annotate(geom="text", x = 16.6, y = 52.4, label=legend_max_c, size = 1.5, family = "Optima", color = "snow") +
+    annotate(geom="text", x = 16.6, y = 51.3, label=legend_min_c, size = 1.5, family = "Optima", color = "snow") +
+    labs(fill = "Schau / Guck")
 ```
 
 ```{r light mode comparison orange purple}
@@ -427,7 +496,8 @@ ggplot() +
     geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, family = "Optima") +
     geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4) +
     theme_minimal() +
-    scale_fill_steps2(low = "#E0961A", mid = "#ffffff", high = "#310d59", midpoint = 0.5, n.breaks = 15, labels = NULL) +
+    #scale_fill_steps2(low = "#E0961A", mid = "#ffffff", high = "#310d59", midpoint = 0.5, n.breaks = 15, labels = NULL) +
+  scale_fill_steps2(low = "seagreen4", mid = "#ffffff", high = "mediumpurple4", midpoint = 0.5, n.breaks = 15, labels = NULL) +
     theme(axis.title.x = element_blank(), 
           axis.title.y = element_blank(),
           axis.text.x = element_blank(),

@@ -3,127 +3,239 @@ title: "Relative Frequency Mapping"
 author: "Dana"
 date: '2022-11-23'
 output: html_document
+toc: true
+toc_float: true
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+## In this RMD
+
+1. Filter the corpus
+2. Calculate relative frequency based on tokencount at location (subcorpus)
+3. Prepare map
+4. Relative frequency map
+(5. Raw frequency map)
+
+
 ## Mapping with Relative Frequency
 
 This Rmd is an updated version of the mappings in 3_first_maps to include the relative frequency, but also to no longer rely on the reg_count() function, but base all counts on the matrix. 
 
 ```{r libs}
-# libraries
-library(stringr) # regex
-library(dplyr) # regex
-library(tidyverse) # mapping
-library(rworldmap) # mapping
+# Load necessary libraries for data manipulation, regex matching, and mapping
+library(stringr)   # Provides functions for handling strings and regular expressions
+library(dplyr)     # Offers functions for data manipulation such as filtering and joining
+library(tidyverse) # A collection of packages for data science (includes ggplot2, dplyr, tidyr, etc.)
+library(rworldmap) # Provides functions to map and visualize geographic data
 
-# data standard
+# Load the main corpus dataset for analysis from the CSV file
 corpus <- read.csv(file = './data_ling/full_matrix_for_filtering.csv') 
+
+# Load the dataset containing token counts by city, and rename the columns to "City" and "Tokencount"
 token_at_location <- read.csv(file = './data_ling/tokens_at_location.csv')
-colnames(token_at_location) <- c("City", "Tokencount") 
+colnames(token_at_location) <- c("City", "Tokencount")
+
+# Load the geographic data with longitude and latitude information for mapping
 longlat <- read.csv(file = './data_maps/gsa_geo_filtered.csv')
 
-# maybe
+# Optionally load a more complete corpus dataset, possibly for extended analysis
 corpus_full <- read.csv(file = './data_ling/train_70.csv')
-matrix <- read.csv(file = './data_ling/gsa_geo_filtered.csv/10k_matrix.csv', header = TRUE) 
-matrix_geo <- read.csv(file = './data_ling/gsa_geo_filtered.csv/10k_matrix_geo.csv', header = TRUE) 
+
+# Load a matrix of word frequency data for 10,000 words, for analysis or processing
+matrix <- read.csv(file = './data_ling/gsa_geo_filtered.csv/10k_matrix.csv', 
+                   header = TRUE) 
+
+# Load the same matrix data, but with geographic information (longitude/latitude)
+matrix_geo <- read.csv(file = './data_ling/gsa_geo_filtered.csv/10k_matrix_geo.csv', 
+                       header = TRUE) 
 ```
 
 Instead of counting, I can just filter the matrix for the word I am interested in. 
 
 ```{r filtering}
-#get word of interest and merge with geo data
+# Extract the subset of the 'corpus' dataset that contains only the rows where the word is in parenthesis
 one_word <- corpus %>% filter(word == "ich")
+
+# Rename the columns of the filtered dataset to "Token", "City", and "Frequency" for clarity
 colnames(one_word) <- c("Token", "City", "Frequency")
-merger_one <- merge(one_word, longlat, by.x ="City", by.y = "City")
+
+# Merge the 'one_word' dataset with geographic data ('longlat') based on the "City" column,
+# to associate each city with its longitude and latitude
+merger_one <- merge(one_word, longlat, by.x = "City", by.y = "City")
+
+# Rename the columns of the merged dataset to "City", "Token", "Frequency", "lon", and "lat"
+# so that longitude and latitude columns are labeled clearly
 colnames(merger_one) <- c("City", "Token", "Frequency", "lon", "lat")
 ```
 
 Now I can add the relative frequency. For that I merge with the counts of all tokens at all locations. This information is merged with the data and the coordinates details. With that in one object, the relative frequency can be calculated. 
+```{r relative_frequency}
+# Merge the 'merger_one' dataset with 'token_at_location' dataset using "City" as the common key.
+# This will combine token frequency information with the total token count for each city.
+merger <- merge(merger_one, token_at_location, by.x = "City", by.y = "City")
 
-```{r relative frequency}
-merger <- merge(merger_one, token_at_location, by.x ="City", by.y = "City")
-merger$relfreq <- (merger$Frequency/merger$Tokencount)
-merger$relfreq1000 <- (merger$relfreq*1000)
+# Calculate the relative frequency of the word in each city by dividing the word's frequency 
+# by the total number of tokens (words) counted in that city.
+merger$relfreq <- (merger$Frequency / merger$Tokencount)
+
+# Multiply the relative frequency by 1000 to get the relative frequency per 1000 tokens, 
+# which is a more interpretable measure.
+merger$relfreq1000 <- (merger$relfreq * 1000)
+
+# Rename the columns of the merged dataset for clarity:
+# - "City" remains the same
+# - "Token" represents the specific word ("ich" in this case)
+# - "Frequency" is the count of how many times the word appears in the city
+# - "lon" and "lat" are the geographic coordinates of the city
+# - "TokenCount" is the total number of tokens (words) counted in the city
+# - "RelativeFrequency" is the calculated relative frequency of the word in the city
+# - "RelativeFrequencyThousand" is the relative frequency per 1000 tokens
 colnames(merger) <- c("City", "Token", "Frequency", "lon", "lat", "TokenCount", "RelativeFrequency", "RelativeFrequencyThousand")
 ```
 
 Then the usual map preparation is done:
 
-```{r map prep}
+```{r map_prep}
+# Get the base world map data from the 'rworldmap' package.
 worldMap <- getMap()
+
+# Define the DACH region, which consists of Germany, Austria, and Switzerland.
 DACH <- c("Germany", "Austria", "Switzerland")
-DACH_map <- which(worldMap$NAME%in%DACH)
-DACH_coord <- lapply(DACH_map, function(i){
+
+# Find the indices in the world map dataset that correspond to the countries in the DACH region.
+# This returns a numeric vector with the position of these countries in the map data.
+DACH_map <- which(worldMap$NAME %in% DACH)
+
+# Extract the coordinates for the borders of each country in the DACH region.
+# The function `lapply` iterates over each country in `DACH_map` and extracts the polygon coordinates.
+DACH_coord <- lapply(DACH_map, function(i) {
+  # Create a data frame with the coordinates of the polygons for the country.
+  # The polygons are stored in the `@polygons` slot of the world map object.
   df <- data.frame(worldMap@polygons[[i]]@Polygons[[1]]@coords)
-  df$region =as.character(worldMap$NAME[i])
+  
+  # Add a 'region' column to the data frame that contains the name of the country (e.g., "Germany").
+  df$region <- as.character(worldMap$NAME[i])
+  
+  # Set column names of the data frame: 'long' for longitude, 'lat' for latitude, and 'region' for the country name.
   colnames(df) <- list("long", "lat", "region")
+  
+  # Return the data frame for this country.
   return(df)
 })
+
+# Combine the list of data frames for each country into a single data frame using `rbind`.
+# This creates one large data frame containing the coordinates of all the countries in the DACH region.
 DACH_coord <- do.call("rbind", DACH_coord)
 ```
 
 And now I can map the relative frequency:
 
-```{r map plot}
-ggplot() + geom_polygon(data = DACH_coord, 
-                        aes(x = long, y = lat, group = region),
-                        colour = "black", 
-                        size = 0.1, 
-                        fill = "gray95") + 
-  coord_map(xlim = c(4.5, 17),  
-            ylim = c(45.5, 55)) + 
+```{r map_plot}
+# Create a ggplot object to plot the map
+ggplot() + 
+  # Add polygons for the DACH region (Germany, Austria, Switzerland) using the DACH_coord data
+  geom_polygon(data = DACH_coord, 
+               aes(x = long, 
+                   y = lat, 
+                   group = region),  # Map longitudes and latitudes, grouped by region
+               colour = "black",                        # Border color for the country outlines
+               size = 0.1,                              # Border line thickness
+               fill = "gray95") +                       # Fill color for the country areas (light gray)
+  
+  # Set the map projection and zoom level (longitude and latitude limits)
+  coord_map(xlim = c(4.5, 17),                          # Longitude limits (west to east)
+            ylim = c(45.5, 55)) +                       # Latitude limits (south to north)
+  
+  # Use a minimal theme (removes axes, grid lines, and background elements)
   theme_minimal() +  
+  
+  # Add points on the map for each city from the `merger` dataset, representing word frequency data
   geom_point(data = merger, 
-             aes(x = lon, y = lat, size = RelativeFrequencyThousand),
-             colour = "darkorchid4",
-             alpha = 0.7)  +
-  #geom_text(data = merger, aes(x = lng, y = lat, label=city), hjust=0.1, vjust=0.1, size = 2) +
+             aes(x = lon, 
+                 y = lat, 
+                 size = RelativeFrequencyThousand),  # Map longitude, latitude, and size to frequency
+             colour = "darkorchid4",                                   # Color of the points (dark purple)
+             alpha = 0.7) +                                            # Transparency of the points (70%)
+  
+  # Optional: Add city labels (currently commented out)
+  # geom_text(data = merger, aes(x = lng, y = lat, label=city), hjust=0.1, vjust=0.1, size = 2) +
+  
+  # Remove the color legend (since it's not used here)
   guides(color = "none") +
-  labs(size="Relative\nFrequency") +
-  ggtitle("'nix' in the GSA") +
-  theme(axis.title.x = element_blank(), 
-        axis.title.y = element_blank(),
-        axis.text.x = element_blank(),
-        axis.text.y = element_blank(),
-        panel.grid.major = element_blank(),
-        plot.title = element_text(hjust = 0.5))
+  
+  # Add labels and titles
+  labs(size="Relative\nFrequency") +        # Label for the size legend (relative frequency per thousand)
+  ggtitle("'nix' in the GSA") +             # Title of the plot
+  
+  # Further customize the theme
+  theme(axis.title.x = element_blank(),     # Remove x-axis title
+        axis.title.y = element_blank(),     # Remove y-axis title
+        axis.text.x = element_blank(),      # Remove x-axis labels
+        axis.text.y = element_blank(),      # Remove y-axis labels
+        panel.grid.major = element_blank(), # Remove major grid lines
+        plot.title = element_text(hjust = 0.5))  # Center the plot title horizontally
 ```
 
 The plot can be exported using ggsave.
 
 ```{r export}
-ggsave("./output/mistkübel.png", width = 6.5, height = 5.5)
+# Save the current ggplot as a PNG image file in the specified output directory.
+# The image is saved as "NAME.png" with a width of 6.5 inches and height of 5.5 inches.
+ggsave("./output/mistkübel.png", 
+       width = 6.5, 
+       height = 5.5)
 ```
 
 I can also plot just the frequencies: 
 
-```{r raw frequency}
-ggplot() + geom_polygon(data = DACH_coord, 
-                        aes(x = long, y = lat, group = region),
-                        colour = "black", 
-                        size = 0.1, 
-                        fill = "gray95") + 
-  coord_map(xlim = c(4.5, 17),  
-            ylim = c(45.5, 55)) + 
+```{r raw_frequency}
+# Create a ggplot object to plot the map of the DACH region (Germany, Austria, Switzerland)
+ggplot() + 
+  
+  # Add polygons for the DACH region using the DACH_coord dataset
+  geom_polygon(data = DACH_coord, 
+               aes(x = long, 
+                   y = lat, 
+                   group = region),  # Map longitudes and latitudes, grouped by region
+               colour = "black",                        # Border color for the country outlines
+               size = 0.1,                              # Border line thickness
+               fill = "gray95") +                       # Fill color for the country areas (light gray)
+  
+  # Set the map projection and zoom level (longitude and latitude limits)
+  coord_map(xlim = c(4.5, 17),                          # Longitude limits (west to east)
+            ylim = c(45.5, 55)) +                       # Latitude limits (south to north)
+  
+  # Use a minimal theme to remove unnecessary visual elements (axes, grid lines, background)
   theme_minimal() +  
+  
+  # Add points to the map for each city in the `merger_one` dataset representing the word frequency
   geom_point(data = merger_one, 
-             aes(x = lon, y = lat, size = Frequency),
-             colour = "darkorchid4",
-             alpha = 0.7)  +
-  #geom_text(data = merger, aes(x = lng, y = lat, label=city), hjust=0.1, vjust=0.1, size = 2) +
+             aes(x = lon, 
+                 y = lat, 
+                 size = Frequency),  # Map longitude, latitude, and point size to Frequency
+             colour = "darkorchid4",                  # Color the points dark purple
+             alpha = 0.7) +                           # Set the transparency of the points (70%)
+  
+  # Optional: Add city labels (currently commented out)
+  # geom_text(data = merger, aes(x = lng, y = lat, label=city), hjust=0.1, vjust=0.1, size = 2) +
+  
+  # Remove the color legend (since only point size is relevant)
   guides(color = "none") +
-  labs(size="Frequency") +
-  ggtitle("'ich' in the GSA") +
-  theme(axis.title.x = element_blank(), 
-        axis.title.y = element_blank(),
-        axis.text.x = element_blank(),
-        axis.text.y = element_blank(),
-        panel.grid.major = element_blank(),
-        plot.title = element_text(hjust = 0.5))
+  
+  # Add labels for the size legend and a plot title
+  labs(size="Frequency") +                # Label for the point size representing word frequency
+  ggtitle("'ich' in the GSA") +           # Title of the plot
+  
+  # Further customize the theme: remove axis titles, axis labels, and grid lines
+  theme(axis.title.x = element_blank(),   # Remove x-axis title
+        axis.title.y = element_blank(),   # Remove y-axis title
+        axis.text.x = element_blank(),    # Remove x-axis labels
+        axis.text.y = element_blank(),    # Remove y-axis labels
+        panel.grid.major = element_blank(),# Remove major grid lines
+        plot.title = element_text(hjust = 0.5))  # Center the plot title
 ```
 
 

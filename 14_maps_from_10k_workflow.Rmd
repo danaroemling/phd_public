@@ -5,6 +5,8 @@ date: "2023-12-04"
 output:
   html_document: default
   pdf_document: default
+toc: true
+toc_float: true
 ---
 
 ```{r setup, include=FALSE}
@@ -20,62 +22,122 @@ Step 1: Libraries
 
 ```{r libs}
 # Libraries
-library(dplyr)
-library(spdep)
-library(sf)
-library(sp)
-library(tidyverse)
-library(gstat)
-library(stringr) 
-library(rnaturalearth)
+library(dplyr)          # For data manipulation and transformation 
+library(spdep)          # For spatial dependence, including calculations 
+                        # like Moran's I and spatial weights.
+library(sf)             # For handling spatial vector data using SF
+library(sp)             # For classes and methods for spatial data in R
+library(tidyverse)      # A collection of R packages for data science
+library(gstat)          # For geostatistical modeling, 
+                        # including kriging and variogram analysis.
+library(stringr)        # For string manipulation and regular expression operations
+library(rnaturalearth)  # For accessing and visualizing natural earth data
 ```
 
 Step 2: Getting the data
 
 ```{r data}
 # Get the kriged & morans data
+# Load Moran's I data from a CSV file, specifying the path to the file
 morans <- read.csv(file = 
                      '/rds/projects/g/grievej-german-dialect-profiling/kriged/morans_10k.csv', 
                    header = TRUE) 
-morans <- as.data.frame(morans)
-colnames(morans) <- c("word", "score") 
+
+# Convert the data to a data frame
+morans <- as.data.frame(morans) 
+
+# Rename the columns for easier reference
+colnames(morans) <- c("word", 
+                      "score") 
+
+# Assign sequential row names (1 to number of rows)
 rownames(morans) <- 1:nrow(morans)
 
-kriged <- read.csv(file = 
-                     '/rds/projects/g/grievej-german-dialect-profiling/kriged/kriged_10k.csv', 
+# Load kriged values from a CSV file, specifying the path to the file
+kriged <- read.csv(file = '/rds/projects/g/grievej-german-dialect-profiling/kriged/kriged_10k_300cutoff.csv', 
                    header = TRUE) 
-names(kriged) <- gsub("\\.", "", names(kriged))
-names(kriged) <- gsub("\\<X", "", names(kriged))
-# for now this is 9250 kriged values until this is rerun
+
+# Remove periods from column names for cleaner formatting
+names(kriged) <- gsub("\\.", 
+                      "", 
+                      names(kriged))
+
+# Remove the prefix 'X' from column names, which may indicate that the column 
+# names were originally invalid R identifiers
+names(kriged) <- gsub("\\<X", 
+                      "", 
+                      names(kriged))
+
+# Note: The current dataset contains 9250 kriged values until further updates are made
 ```
 
 Step 3: Set up mapping
 This is just all the underlying information needed to produce maps later on.
 
 ```{r mapping_basics}
-# set up mapping 
+# Set up mapping 
+# Create a data frame containing city names and their corresponding 
+# longitude and latitude coordinates
 cities <- data.frame(
-  City = c("Köln", "München", "Wien", "Zürich", "Berlin", "Hamburg"),
-  Long = c(6.9578, 11.5755, 16.3731, 8.5417, 13.3833, 10),
-  Lat = c(50.9422, 48.1372, 48.2083, 47.3769, 52.5167, 53.55))
+  City = c("Köln", "München", "Wien", "Zürich", "Berlin", "Hamburg"),  # City names
+  Long = c(6.9578, 11.5755, 16.3731, 8.5417, 13.3833, 10),  # Longitude values
+  Lat = c(50.9422, 48.1372, 48.2083, 47.3769, 52.5167, 53.55))  # Latitude values
+
+# Define the coordinate reference system (CRS) using EPSG:4326 (WGS 84)
 crs2 <- CRS("+init=epsg:4326")
-cities_sf <- st_as_sf(cities, coords = c("Long", "Lat"), crs = crs2)
 
-gsa_outline <- ne_countries(country = c("Austria", "Germany", "Switzerland"), returnclass="sf", scale = "large")
-gsa_plot <- gsa_outline %>% dplyr::select(geometry) # just the outlines of the three
-gsa_spatial <- as_Spatial(gsa_plot) # new object as spatial instead of sf
+# Convert the cities data frame to a simple features (sf) object, 
+# specifying the coordinates and CRS
+cities_sf <- st_as_sf(cities, 
+                      coords = c("Long", 
+                                 "Lat"), 
+                      crs = crs2)
 
+# Retrieve country outlines for Austria, Germany, and Switzerland 
+# as a simple features object
+gsa_outline <- ne_countries(country = c("Austria", 
+                                        "Germany", 
+                                        "Switzerland"), 
+                            returnclass="sf", 
+                            scale = "large")
+
+# Select only the geometry column from the country outlines for plotting
+gsa_plot <- gsa_outline %>% 
+  dplyr::select(geometry)
+
+# Convert the sf object to a spatial object for compatibility with sp functions
+gsa_spatial <- as_Spatial(gsa_plot)
+
+# Generate a spatial grid by systematically sampling points within the outline
 sp_grid <- as.data.frame(spsample(gsa_spatial,
-                                  n = 100000,
-                                  type = "regular", # systematically aligned sampling
-                                  offset = c(0.5,0.5))) # makes sure grid is the same every time
-sp_grid_sf <- st_as_sf(sp_grid, coords=c("x1","x2"), crs = st_crs(4326))
+                                  n = 100000,  
+                                  # Number of points to sample
+                                  type = "regular",  
+                                  # Systematically aligned sampling
+                                  offset = c(0.5, 0.5)))  
+                                  # Offset to ensure a consistent grid layout
 
+# Convert the generated grid to a simple features (sf) object
+sp_grid_sf <- st_as_sf(sp_grid, 
+                       coords=c("x1", 
+                                "x2"), 
+                       crs = st_crs(4326))
+
+# Generate a smaller spatial grid by systematically sampling 
+# fewer points within the outlined area
 sp_grid_small <- as.data.frame(spsample(gsa_spatial,
-                                        n = 500,
-                                        type = "regular", # systematically aligned sampling
-                                        offset = c(0.5,0.5))) # makes sure grid is the same every time
-sp_grid_sf_small <- st_as_sf(sp_grid_small, coords=c("x1","x2"), crs = st_crs(4326))
+                                        n = 500,  
+                                        # Reduced number of points for the smaller grid
+                                        type = "regular",  
+                                        # Systematically aligned sampling
+                                        offset = c(0.5, 0.5)))  
+                                        # Offset for consistent grid layout
+
+# Convert the smaller grid to a simple features (sf) object
+sp_grid_sf_small <- st_as_sf(sp_grid_small, 
+                             coords=c("x1", 
+                                      "x2"), 
+                             crs = st_crs(4326))
 ```
 
 ## Unweighted Maps
@@ -85,61 +147,163 @@ First, I create a variable for the strings I want to work with. Then I get
 the kriged values for these.
 
 ```{r get_kriged_values}
-# input the words you want to map
-strings <- tolower(c("schlaf", "da","gehen","auch","folgen","aus"))
-# OR
+# Input the words you want to map
+# Define a character vector of words, converting them to lowercase
+strings <- tolower(c("schlaf", "da", "gehen", "auch", "folgen", "aus"))
+
+# Alternatively, read words from a text file, converting them to lowercase
+# Each word should be separated by a comma in the file
 strings <- tolower(readLines("/rds/projects/g/grievej-german-dialect-profiling/liste.txt"))
-strings <- trimws(unlist(strsplit(strings, ",")))
 
-# get kriged values for those words
+# Trim whitespace and split the input string by commas, 
+# unlisting it to create a character vector
+strings <- trimws(unlist(strsplit(strings, 
+                                  ",")))
+
+# Get kriged values for those words
+# Convert the kriged data frame to a tibble for easier manipulation
 kriged_tibble <- as_tibble(kriged)
-kriged_values <- kriged_tibble %>% select(c("lon", "lat"))
 
+# Select only the longitude and latitude columns from the kriged tibble
+kriged_values <- kriged_tibble %>% 
+  select(c("lon", 
+           "lat"))
+
+# Loop through each word in the strings vector
 for (cname in strings) {
+  # Check if the current word (cname) is a column in the kriged tibble
   if (cname %in% colnames(kriged_tibble)) {
+    # If the word exists, add its corresponding kriged values 
+    # to the kriged_values data frame
     kriged_values[, paste0(cname)] <- as.numeric(unlist(kriged_tibble[, cname]))
   }
 }
-
 ```
 
 In the next step, I calculate the mean, median and SD for the kriged
 values in question. 
 
 ```{r kriged_calc}
-# these values were scaled during the kriging process using scale() 
-calculation <- kriged_values %>%
-  dplyr::rowwise() %>%
-  dplyr::mutate(mean_val = mean(c_across(strings), na.rm = TRUE),
-                median_val = median(c_across(strings), na.rm = TRUE),
-                sd_val = sd(c_across(strings), na.rm = TRUE)) %>%
-  dplyr::ungroup()
-calculation_sf <- st_as_sf(calculation, coords = c("lon", "lat"), crs = CRS("+init=epsg:4326"))
+# The 'kriged_values' data frame contains the kriged values for specified words 
+# along with their coordinates (lon, lat).
+
+# Select all columns from 'kriged_values' 
+# except 'lon' and 'lat' for further calculations
+data_for_calculations <- kriged_values %>%
+  select(-lon, 
+         -lat)
+
+# Calculate the mean of the values for each row in 'data_for_calculations'
+# The mean is added as a new column named 'mean' in the 'kriged_values' df
+kriged_values$mean <- rowMeans(data_for_calculations)
+
+# Calculate the median for each row in 'data_for_calculations'
+# The median is added as a new column named 'median' in the 'kriged_values' df
+kriged_values$median <- apply(data_for_calculations, 
+                              1, 
+                              median)
+
+# Calculate the standard deviation for each row in 'data_for_calculations'
+# The standard deviation is added as a new column named 'sd' in the 'kriged_values' df
+kriged_values$sd <- apply(data_for_calculations, 
+                          1, 
+                          sd)
+
+# Convert the resulting 'kriged_values' data frame into a spatial object
+# Using the coordinates (lon, lat) with the specified CRS 
+calculation_sf <- st_as_sf(kriged_values, 
+                           coords = c("lon", 
+                                      "lat"), 
+                           crs = CRS("+init=epsg:4326"))
 ```
 
 I can already plot this, if I wanted to, even though this is not as informative.
 
 ```{r plot_no_large_grid}
+# Start a new ggplot object
 ggplot() +
-    geom_sf(data = calculation_sf, aes(fill=mean_val), shape = 21, size = 2, stroke = 0, lwd = 0) +
-    geom_sf(data = gsa_plot, aes(geometry = geometry), color="black", fill=NA, size = 0.5) +
-    geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, family = "Optima") +
-    geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4) +
+    # Add a spatial polygon layer representing kriged mean values
+    geom_sf(data = calculation_sf, 
+            aes(fill = mean_val), 
+            shape = 21, 
+            size = 2, 
+            stroke = 0, 
+            lwd = 0) +
+    
+    # Overlay the outline of the geographical area (gsa_plot) with black borders
+    geom_sf(data = gsa_plot, 
+            aes(geometry = geometry), 
+            color = "black", 
+            fill = NA, 
+            size = 0.5) +
+    
+    # Add labels for cities from the cities_sf data, 
+    # positioned slightly below each city
+    geom_sf_text(data = cities_sf, 
+                 aes(label = City), 
+                 size = 2.5, 
+                 nudge_x = 0, 
+                 nudge_y = -0.15, 
+                 family = "Optima") +
+    
+    # Add points for cities using a cross (shape 4)
+    geom_sf(data = cities_sf, 
+            aes(geometry = geometry), 
+            shape = 4) +
+    
+    # Use a minimal theme for the plot
     theme_minimal() +
-    scale_fill_steps(low="#ffffff", high="#310d59", n.breaks = 20, labels = NULL) +
+    
+    # Define the fill color scale for the mean values, 
+    # transitioning from white to a dark color
+    scale_fill_steps(low = "#ffffff", 
+                     high = "#310d59", 
+                     n.breaks = 20, 
+                     labels = NULL) +
+    
+    # Customize theme to remove axis titles and text, and remove major grid lines
     theme(axis.title.x = element_blank(), 
           axis.title.y = element_blank(),
           axis.text.x = element_blank(),
           axis.text.y = element_blank(),
           panel.grid.major = element_blank()) +
-    theme(legend.position = c(0.90, 0.65), 
-          legend.title = element_text(size = 6, family = "Optima"), 
-          legend.text = element_text(size = 6, family = "Optima", hjust = 1),
-          legend.title.align = 0,
-          legend.key.size = unit(0.3, "cm"),
-          legend.key.width = unit(0.4,"cm")) +
-    #ggplot2::annotate(geom="text", x = 17, y = 52.4, label=legend_max, size = 1.5, family = "Optima") +
-    #ggplot2::annotate(geom="text", x = 17, y = 51.3, label=legend_min, size = 1.5, family = "Optima") +
+    
+    # Customize legend appearance
+    # Position the legend
+    theme(legend.position = c(0.90, 
+                              0.65),  
+          # Font size and family for legend title
+          legend.title = element_text(size = 6, 
+                                      family = "Optima"),  
+          # Font size and alignment for legend text
+          legend.text = element_text(size = 6, 
+                                     family = "Optima",
+                                     hjust = 1), 
+          # Align the legend title to the left
+          legend.title.align = 0,  
+          # Size of the legend keys
+          legend.key.size = unit(0.3, 
+                                 "cm"),  
+          # Width of the legend keys
+          legend.key.width = unit(0.4, 
+                                  "cm")) +  
+    
+    # Optional annotations for the legend 
+    # ggplot2::annotate(geom = "text", 
+    #                   x = 17, 
+    #                   y = 52.4, 
+    #                   label = legend_max, 
+    #                   size = 1.5, 
+    #                   family = "Optima") +
+  
+    # ggplot2::annotate(geom = "text", 
+    #                   x = 17, 
+    #                   y = 51.3, 
+    #                   label = legend_min, 
+    #                   size = 1.5, 
+    #                   family = "Optima") +
+    
+    # Add a label for the fill legend (currently left blank)
     labs(fill = " ")
 ```
 
@@ -147,18 +311,43 @@ So, I rather krige to the large grid before mapping.
 
 ```{r large_krige_one}
 # Variogram
-data <- calculation["mean_val"]
-coords <- calculation[c("lon", "lat")]
+# Extract the mean values from the kriged_values dataframe for analysis
+data <- kriged_values["mean"]
+
+# Get the coordinates (longitude and latitude) for the spatial points
+coords <- kriged_values[c("lon", 
+                          "lat")]
+
+# Define the coordinate reference system (CRS) for geographic coordinates (WGS 84)
 crs <- CRS("+init=epsg:4326") 
-spdf <- SpatialPointsDataFrame(coords      = coords,
-                               data        = data, 
-                               proj4string = crs)
+
+# Create a SpatialPointsDataFrame object to hold the spatial data 
+spdf <- SpatialPointsDataFrame(coords      = coords,  # Coordinates for spatial points
+                               data        = data,   # Associated data (mean values)
+                               proj4string = crs)    # Assign the defined CRS
+
+# Remove duplicated spatial coordinates to avoid redundancy in the analysis
 spdf = spdf[which(!duplicated(spdf@coords)), ]
-vg <- variogram(mean_val~1, data = spdf, width = 1, cutoff = 300)
-vg_fit <- fit.variogram(vg, vgm("Exp")) 
+
+# Compute the empirical variogram for the mean values; 
+# 'mean~1' indicates a constant mean model, 'width' defines bin width, 
+# 'cutoff' is the distance limit
+vg <- variogram(mean ~ 1, 
+                data = spdf, 
+                width = 1, 
+                cutoff = 300)
+
+# Fit a variogram model to the empirical variogram 
+# using an exponential model ('Exp')
+vg_fit <- fit.variogram(vg, 
+                        vgm("Exp")) 
 
 # Kriging
-krig <- krige(mean_val~1, 
+# Perform ordinary kriging interpolation for the mean values
+# 'mean~1' indicates a constant mean model, 'locations' are the spatial points, 
+# 'newdata' specifies the grid for prediction,
+# and 'model' is the fitted variogram model
+krig <- krige(mean ~ 1, 
                locations = spdf, 
                newdata = sp_grid_sf, 
                model = vg_fit)
@@ -167,29 +356,90 @@ krig <- krige(mean_val~1,
 This then can be turned into a plot.
 
 ```{r plot_one}
-legend_max <- round(max(krig$var1.pred), digits = 2)
-legend_min <- round(min(krig$var1.pred), digits = 2) 
+# Calculate the maximum and minimum predicted values from the kriging results
+# Round the maximum predicted value to two decimal places
+legend_max <- round(max(krig$var1.pred), 
+                    digits = 2)  
+legend_min <- round(min(krig$var1.pred), 
+                    digits = 2)  
 
+# Create a ggplot visualization
 ggplot() +
-    geom_sf(data = krig, aes(fill=var1.pred), shape = 21, size = 0.75, stroke = 0, lwd = 0) +
-    geom_sf(data = gsa_plot, aes(geometry = geometry), color="black", fill=NA, size = 0.5) +
-    geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, family = "Optima") +
-    geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4) +
+    # Plot the kriging predictions as a filled spatial polygon layer
+    geom_sf(data = krig, 
+            aes(fill = var1.pred), 
+            shape = 21, 
+            size = 0.75, 
+            stroke = 0, 
+            lwd = 0) +
+    
+    # Overlay the outlines of the geographical areas (GSA outline)
+    geom_sf(data = gsa_plot, 
+            aes(geometry = geometry), 
+            color = "black", 
+            fill = NA, 
+            size = 0.5) +
+    
+    # Add city labels from the cities_sf spatial data
+    geom_sf_text(data = cities_sf, 
+                 aes(label = City), 
+                 size = 2.5, 
+                 nudge_x = 0, 
+                 nudge_y = -0.15, 
+                 family = "Optima") +
+    
+    # Add city points for better visibility
+    geom_sf(data = cities_sf, 
+            aes(geometry = geometry), 
+            shape = 4) +
+    
+    # Apply a minimal theme for clean visualization
     theme_minimal() +
-    scale_fill_steps(low="#ffffff", high="#310d59", n.breaks = 20, labels = NULL) +
+    
+    # Define color scale for the fill aesthetic, from white to dark blue
+    scale_fill_steps(low = "#ffffff", 
+                     high = "#310d59", 
+                     n.breaks = 20, 
+                     labels = NULL) +
+    
+    # Customize the theme to remove axis titles and text for a cleaner look
     theme(axis.title.x = element_blank(), 
           axis.title.y = element_blank(),
           axis.text.x = element_blank(),
           axis.text.y = element_blank(),
           panel.grid.major = element_blank()) +
-    theme(legend.position = c(0.90, 0.65), 
-          legend.title = element_text(size = 6, family = "Optima"), 
-          legend.text = element_text(size = 6, family = "Optima", hjust = 1),
+    
+    # Customize legend appearance and position
+    theme(legend.position = c(0.90, 
+                              0.65), 
+          legend.title = element_text(size = 6, 
+                                      family = "Optima"), 
+          legend.text = element_text(size = 6, 
+                                     family = "Optima", 
+                                     hjust = 1),
           legend.title.align = 0,
-          legend.key.size = unit(0.3, "cm"),
-          legend.key.width = unit(0.4,"cm")) +
-    ggplot2::annotate(geom="text", x = 17, y = 52.4, label=legend_max, size = 1.5, family = "Optima") +
-    ggplot2::annotate(geom="text", x = 17, y = 51.3, label=legend_min, size = 1.5, family = "Optima") +
+          legend.key.size = unit(0.3, 
+                                 "cm"),
+          legend.key.width = unit(0.4, 
+                                  "cm")) +
+    
+    # Annotate the plot with the maximum predicted value
+    ggplot2::annotate(geom = "text", 
+                      x = 17, 
+                      y = 52.4, 
+                      label = legend_max, 
+                      size = 1.5, 
+                      family = "Optima") +
+    
+    # Annotate the plot with the minimum predicted value
+    ggplot2::annotate(geom = "text", 
+                      x = 17, 
+                      y = 51.3, 
+                      label = legend_min, 
+                      size = 1.5, 
+                      family = "Optima") +
+    
+    # Set the label for the fill legend to be empty
     labs(fill = " ")
 ```
 
@@ -199,76 +449,191 @@ Similar calculation as above, but first I multiply all values by their
 respective Moran's I value.
 
 ```{r morans_calc}
-# calculate kriged values by moran's I value for variable
-# add as new columns
+# Multiply kriged values by Moran's I value for each specified word
+# Add the resulting values as new columns in the kriged_values dataframe
 for (word in strings) {
+  # Check if the current word is present in the morans dataframe
   if (word %in% morans$word) {
+    # Extract the corresponding Moran's I score for the word
     word_score <- as.numeric(morans$score[morans$word == word])
+    
+    # Print the word, its score, and its index for debugging purposes
     print(paste0("Word: ", word))
     print(paste0("Score: ", word_score))
-    print(paste0("Index: ", match(word, morans$word)))
-    kriged_values[, paste0(word, "_multiplied")] <- as.numeric(unlist(kriged_values[, word])) * word_score
+    print(paste0("Index: ", match(word, 
+                                  morans$word)))
+    
+    # Multiply the kriged values for the word by its corresponding Moran's I score
+    kriged_values[, paste0(word, "_multiplied")] <- 
+      as.numeric(unlist(kriged_values[, word])) * word_score
   }
 }
 
-# calculate mean, median, sd
-multiplied_columns <- paste0(strings, "_multiplied")
+# Calculate summary statistics (mean, median, and standard deviation) 
+# for the multiplied columns
+# Create a vector of the new column names
+multiplied_columns <- paste0(strings, 
+                             "_multiplied")  
+
 calculation <- kriged_values %>%
-  dplyr::select(lon, lat, all_of(multiplied_columns)) %>%
-  dplyr::rowwise() %>%
-  dplyr::mutate(mean_val = mean(c_across(multiplied_columns), na.rm = TRUE),
-                median_val = median(c_across(multiplied_columns), na.rm = TRUE),
-                sd_val = sd(c_across(multiplied_columns), na.rm = TRUE)) %>%
-  dplyr::ungroup()
-calculation_sf <- st_as_sf(calculation, coords = c("lon", "lat"), crs = crs2)
+  # Select the longitude, latitude, and multiplied columns
+  dplyr::select(lon, 
+                lat, 
+                all_of(multiplied_columns))  
+
+# Compute the mean across the multiplied columns, ignoring NA values
+calculation$mean <- rowMeans(calculation[, multiplied_columns], 
+                             na.rm = TRUE)
+
+# Compute the median across the multiplied columns, ignoring NA values
+calculation$median <- apply(calculation[, multiplied_columns], 
+                            1, median, 
+                            na.rm = TRUE)
+
+# Compute the standard deviation across the multiplied columns, 
+# ignoring NA values
+calculation$sd <- apply(calculation[, multiplied_columns], 
+                        1, 
+                        sd, 
+                        na.rm = TRUE)
+
+# Convert the results to a simple features (sf) object 
+calculation_sf <- st_as_sf(calculation, 
+                           coords = c("lon",
+                                      "lat"), 
+                           crs = crs2)
 ```
 
 Then, again, kriging to large grid.
 
 ```{r large_krige_two}
-# Variogram
-data <- calculation["mean_val"]
-coords <- calculation[c("lon", "lat")]
+# Variogram Analysis
+# Extract the 'mean' column from the calculation dataframe
+data <- calculation["mean"]  
+# Extract longitude and latitude coordinates
+coords <- calculation[c("lon", 
+                        "lat")]  
+# Define the coordinate reference system (EPSG:4326 for WGS 84)
 crs <- CRS("+init=epsg:4326") 
+
+# Create a SpatialPointsDataFrame object combining coordinates and data and
+# assign the specified CRS to the spatial object
 spdf <- SpatialPointsDataFrame(coords      = coords,
                                data        = data, 
-                               proj4string = crs)
-spdf = spdf[which(!duplicated(spdf@coords)), ]
-vg <- variogram(mean_val~1, data = spdf, width = 1, cutoff = 300)
-vg_fit <- fit.variogram(vg, vgm("Exp")) 
+                               proj4string = crs) 
 
-# Kriging
-krig <- krige(mean_val~1, 
-              locations = spdf, 
-              newdata = sp_grid_sf, 
-              model = vg_fit)
+# Remove duplicate coordinates from the SpatialPointsDataFrame
+spdf = spdf[which(!duplicated(spdf@coords)), ]
+
+# Compute the variogram for the mean values with specified parameters
+vg <- variogram(mean~1, 
+                data = spdf, 
+                width = 1, 
+                cutoff = 300) 
+# 'mean~1' specifies that we're modeling the mean values without a trend
+# 'width' sets the distance interval for calculating the variogram
+# 'cutoff' sets the maximum distance for which the variogram is calculated
+
+# Fit an exponential variogram model to the computed variogram
+vg_fit <- fit.variogram(vg, 
+                        vgm("Exp")) 
+# 'vgm("Exp")' specifies that we're using an exponential model for fitting
+
+# Kriging interpolation based on the fitted variogram model
+krig <- krige(mean~1,  # Model the mean values
+               locations = spdf,  # Use the spatial points from the spdf
+               newdata = sp_grid_sf,  # Predict values at the points in sp_grid_sf
+               model = vg_fit)  # Use the fitted variogram model for the kriging
 ```
 
 Then, this can be mapped as well. 
 
 ```{r plot_two}
-legend_max <- round(max(krig$var1.pred), digits = 2)
-legend_min <- round(min(krig$var1.pred), digits = 2)  
+# Calculate maximum and minimum predicted values from the kriging results
+# Round the maximum predicted value to 2 decimal places
+legend_max <- round(max(krig$var1.pred), 
+                    digits = 2)  
+legend_min <- round(min(krig$var1.pred), 
+                    digits = 2) 
 
+# Create a ggplot visualization
 ggplot() +
-    geom_sf(data = krig, aes(fill=var1.pred), shape = 21, size = 0.75, stroke = 0, lwd = 0) +
-    geom_sf(data = gsa_plot, aes(geometry = geometry), color="black", fill=NA, size = 0.5) +
-    geom_sf_text(data = cities_sf, aes(label = City), size = 2.5, nudge_x = 0, nudge_y = -0.15, family = "Optima") +
-    geom_sf(data = cities_sf, aes(geometry = geometry), shape = 4) +
+    # Add the kriging results as a filled map
+    geom_sf(data = krig, 
+            aes(fill = var1.pred), 
+            shape = 21, 
+            size = 0.75, 
+            stroke = 0, 
+            lwd = 0) +
+  
+    # Add the geographical outline of the selected countries
+    geom_sf(data = gsa_plot, 
+            aes(geometry = geometry), 
+            color="black", 
+            fill = NA, 
+            size = 0.5) +
+  
+    # Add city names to the map, nudging the text slightly for better visibility
+    geom_sf_text(data = cities_sf, 
+                 aes(label = City), 
+                 size = 2.5, 
+                 nudge_x = 0, 
+                 nudge_y = -0.15, 
+                 family = "Optima") +
+  
+    # Add city markers to the map
+    geom_sf(data = cities_sf, 
+            aes(geometry = geometry), 
+            shape = 4) +
+  
+    # Set a minimal theme for the plot
     theme_minimal() +
-    scale_fill_steps(low="#ffffff", high="#310d59", n.breaks = 20, labels = NULL) +
+  
+    # Define a gradient color scale for the fill based on predicted values
+    scale_fill_steps(low = "#ffffff", 
+                     high = "#310d59", 
+                     n.breaks = 20, 
+                     labels = NULL) +
+  
+    # Customize the appearance of axis titles and text
     theme(axis.title.x = element_blank(), 
           axis.title.y = element_blank(),
           axis.text.x = element_blank(),
           axis.text.y = element_blank(),
           panel.grid.major = element_blank()) +
-    theme(legend.position = c(0.90, 0.65), 
-          legend.title = element_text(size = 6, family = "Optima"), 
-          legend.text = element_text(size = 6, family = "Optima", hjust = 1),
-          legend.title.align = 0,
-          legend.key.size = unit(0.3, "cm"),
-          legend.key.width = unit(0.4,"cm")) +
-    ggplot2::annotate(geom="text", x = 17, y = 52.4, label=legend_max, size = 1.5, family = "Optima") +
-    ggplot2::annotate(geom="text", x = 17, y = 51.3, label=legend_min, size = 1.5, family = "Optima") +
+  
+    # Customize the legend appearance
+    # Position of the legend in the plot
+    theme(legend.position = c(0.90, 
+                              0.65),  
+          # Title text settings
+          legend.title = element_text(size = 6, 
+                                      family = "Optima"),  
+          # Legend item text settings
+          legend.text = element_text(size = 6, 
+                                     family = "Optima", 
+                                     hjust = 1),  
+          legend.title.align = 0,  # Align legend title to the left
+          legend.key.size = unit(0.3, 
+                                 "cm"),  # Size of the legend keys
+          legend.key.width = unit(0.4,
+                                  "cm")) +  # Width of the legend keys
+  
+    # Annotate the plot with maximum and minimum values for reference
+    ggplot2::annotate(geom = "text", 
+                      x = 17, 
+                      y = 52.4, 
+                      label = legend_max, 
+                      size = 1.5, 
+                      family = "Optima") +
+  
+    ggplot2::annotate(geom = "text", 
+                      x = 17, 
+                      y = 51.3, 
+                      label = legend_min, 
+                      size = 1.5, 
+                      family = "Optima") +
+  
+    # Remove the default fill label for the legend
     labs(fill = " ")
 ```

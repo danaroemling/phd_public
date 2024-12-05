@@ -1,0 +1,574 @@
+---
+title: "Dialect region shapefiles"
+author: "Dana Roemling"
+date: "2024-10-18"
+output: html_document
+toc: true
+toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Dialect Region Shapefiles
+
+In order to check if a hotspot falls into a specific dialect area, this rmd documents how to set up the dialect shapefiles and then uses them for hotspot checking.
+
+Originally, the data for this shapefile comes from the Rede project, Regionalsprache.de. They provide a mapping tool for a lot of different dialect datasets. They have a raster version of the dialect regions found by Lameli. It can be accessed here: https://www.regionalsprache.de/SprachGis/RasterMap/Dialekteinteilungen/@32314
+
+The corresponding academic publication for Lameli is:
+Lameli, Alfred (2013): Strukturen im Sprachraum: Analysen zur arealtypologischen Komplexität der Dialekte in Deutschland. Berlin & New York: De Gruyter.
+
+In order to use the raster data, it needed to be converted into a shapefile. The download from Rede offers to export it as a Geojson file, which is the closest file format to what I need. 
+
+I then used https://mapshaper.org which offers to convert spatial file formats. Here I could change the Geojson to an ESRI format, with which I could work further.
+
+```{r data_libs}
+# Load the packages
+library(sf)       # For handling spatial data
+library(sp)       # For setting the CRS
+library(dplyr)    # For data manipulation
+library(ggplot2)  # For plotting spatial data
+library(ggpattern) # For different fill options when plotting
+library(paletteer) # For colour palette
+
+# Read the spatial data from a shapefile using the sf package
+# 'dsn' specifies the file path to the shapefile directory
+# 'layer' specifies the name of the shapefile (without the .shp extension)
+# This is the old shapefile
+germany <- st_read(dsn = "/Users/dana/Documents/R/PHD/data_maps/dialektregion",
+                   layer = "lameli")
+
+# This is the exported shapefile from below, to be read in for further work
+germany <- st_read(dsn = "/Users/dana/Documents/R/PHD/data_maps/dialektregion",
+                   layer = "dialect")
+colnames(germany) <- c("gid", "region", "transition", "lowsaxon", 
+                       "highgerman", "ripuarian", "geometry")
+
+# Transform into four broader dialect areas
+germany$language_region <- ifelse(germany$ripuarian == "ja", "Ripuarian",
+                           ifelse(germany$lowsaxon == "ja", "Low German",
+                           ifelse(germany$highgerman == "ja", "High German", "Middle German")))
+
+# Transform the coordinate reference system (CRS) of the 'germany' object
+# This converts the spatial data to the WGS84 coordinate system, which uses latitude and longitude
+# '+proj=longlat' specifies the use of geographic coordinates (latitude/longitude)
+# '+datum=WGS84' ensures the datum is the World Geodetic System 1984, a standard for global positioning
+# 'no_defs' avoids loading other CRS parameters from external sources
+# '+ellps=WGS84' specifies the shape of the Earth (ellipsoid) as WGS84
+# '+towgs84=0,0,0' applies no transformation offsets since it's already in WGS84
+germany <- st_transform(germany, 
+                        CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+
+# Create a new object 'germany_small' that is a subset of the 'germany' object
+germany_small <- germany %>% select(gid, geometry)
+```
+
+To make the shapefile useful, I need to add some information to it. 
+This was done using https://mapshaper.org, which has a select tool to see the IDs of the polygons. These were then compared to Lameli (2013) to name all regions. 
+In case Lameli (2013) did not name the regions appropriately, they were double-checked with this publication:
+Jürgen Erich Schmidt. Vom traditionellen Dialekt zu den modernen deutschen Regionalsprachen. In Deutsche Akademie für Sprache und Dichtung / Union der deutschen Akademien der Wissenschaften (Hrsg.), Vielfalt und Einheit der deutschen Sprache: Zweiter Bericht zur Lage der deutschen Sprache, 105-143. Tübingen: Stauffenburg.
+Accessible as an image on Rede: https://www.regionalsprache.de/SprachGis/VectorMap/Dialekteinteilungen/@54860
+
+```{r data_wrangling1}
+# Create a new column called 'region' in the 'germany_small' data frame
+# Initialize all values in this column to NA (missing values)
+# This column is intended to store regional labels for each spatial unit
+germany_small$region <- NA
+
+# Create another new column called 'übergang' in the 'germany_small' data frame
+# Initialize all values in this column to the string "nein" (German for "no")
+# This column is a categorical variable indicating whether or not a region is a transition area
+germany_small$übergang <- "nein"
+
+# Create a new column called 'niederdeutsch' in the 'germany_small' data frame
+# Initialize all values in this column to NA (missing values)
+# This column is storing information about whether the region is classified as speaking Niederdeutsch (Low German)
+# Same for the High German and ripuarisch dialect areas
+germany_small$niederdeutsch <- NA
+germany_small$hochdeutsch <- NA
+germany_small$ripuarisch <- NA
+```
+
+```{r data_wrangling2}
+# Example annotation
+# Assign the value "nordostniederdeutsch" to the first element of the 'region' column in the 'germany_small' data frame
+# This means that the first geographic unit (row 1) in 'germany_small' is classified as belonging to the "nordostniederdeutsch" region
+germany_small$region[1] <- "nordostniederdeutsch"
+
+# The rest of the batch
+germany_small$region[2] <- "nordniederdeutsch"
+germany_small$region[4] <- "nordniederdeutsch"
+germany_small$region[25] <- "nordniederdeutsch"
+germany_small$region[14] <- "westniederdeutsch"
+germany_small$region[24] <- "brandenburgisch"
+germany_small$region[6] <- "brandenburgisch"
+germany_small$region[26] <- "ostfälisch"
+germany_small$region[27] <- "ostfälisch"
+germany_small$region[21] <- "westfälisch"
+germany_small$region[22] <- "westfälisch"
+germany_small$region[23] <- "westfälisch"
+germany_small$region[20] <- "westfälisch"
+germany_small$region[13] <- "niederfränkisch"
+germany_small$region[3] <- "nordwestniederdeutsch"
+germany_small$region[9] <- "bairisch"
+germany_small$region[7] <- "ostfränkisch"
+germany_small$region[16] <- "ostfränkisch"
+germany_small$region[5] <- "schwäbisch"
+germany_small$region[12] <- "ripuarisch"
+germany_small$region[11] <- "moselfränkisch"
+germany_small$region[10] <- "rheinfränkisch-hessisch"
+germany_small$region[19] <- "rheinfränkisch-hessisch"
+germany_small$region[8] <- "sächsisch-thüringisch"
+germany_small$region[17] <- "ostfränkisch"
+germany_small$region[15] <- "schwäbisch"
+germany_small$region[18] <- "schwäbisch"
+germany_small$region[28] <- "sächsisch-thüringisch"
+
+# Annotation for the transition areas
+germany_small$übergang[24] <- "ja"
+germany_small$übergang[25] <- "ja"
+germany_small$übergang[4] <- "ja"
+germany_small$übergang[27] <- "ja"
+germany_small$übergang[22] <- "ja"
+germany_small$übergang[23] <- "ja"
+germany_small$übergang[20] <- "ja"
+germany_small$übergang[13] <- "ja"
+germany_small$übergang[11] <- "ja"
+germany_small$übergang[17] <- "ja"
+germany_small$übergang[15] <- "ja"
+germany_small$übergang[18] <- "ja"
+germany_small$übergang[16] <- "ja"
+germany_small$übergang[19] <- "ja"
+germany_small$übergang[28] <- "ja"
+
+# Annotation for Low German dialect area
+germany_small$niederdeutsch[1] <- "ja"
+germany_small$niederdeutsch[2] <- "ja"
+germany_small$niederdeutsch[4] <- "ja"
+germany_small$niederdeutsch[25] <- "ja"
+germany_small$niederdeutsch[14] <- "ja"
+germany_small$niederdeutsch[24] <- "ja"
+germany_small$niederdeutsch[6] <- "ja"
+germany_small$niederdeutsch[26] <- "ja"
+germany_small$niederdeutsch[27] <- "ja"
+germany_small$niederdeutsch[21] <- "ja"
+germany_small$niederdeutsch[22] <- "ja"
+germany_small$niederdeutsch[23] <- "ja"
+germany_small$niederdeutsch[20] <- "ja"
+germany_small$niederdeutsch[3] <- "ja"
+
+# Annotation for High German dialect area
+germany_small$hochdeutsch[9] <- "ja"
+germany_small$hochdeutsch[5] <- "ja"
+germany_small$hochdeutsch[15] <- "ja"
+germany_small$hochdeutsch[16] <- "ja"
+germany_small$hochdeutsch[7] <- "ja"
+germany_small$hochdeutsch[17] <- "ja"
+
+# Annotation for ripuarisch dialect area
+germany_small$ripuarisch[12] <- "ja"
+germany_small$ripuarisch[11] <- "ja"
+germany_small$ripuarisch[13] <- "ja"
+
+# code the rest as no
+germany_small[is.na(germany_small)] <- "nein"
+```
+
+```{r map_export}
+# Create a ggplot object to visualize the data
+# ggplot() initializes a blank plot, providing a base for adding layers
+ggplot() +
+  # Add a layer for plotting simple features (spatial data) using the geom_sf() function
+  # 'data = germany_small' specifies that the spatial data to be plotted comes from the 'germany_small' data frame
+  # aes(geometry = geometry) maps the geometry column (which contains spatial shapes) to the plot
+  # This will display the geographical shapes from the 'germany_small' data frame on the plot
+  geom_sf(data = germany_small, 
+          aes(geometry = geometry))
+
+# Write the 'germany_small' data frame to a shapefile using the st_write() function from the sf package
+# The shapefile will be saved with the name "dialect_shp.shp" in the current working directory
+# This operation exports the spatial data, preserving its structure and attributes, making it available for use in GIS software or other spatial analysis tools
+st_write(germany_small, "dialect.shp")
+```
+
+```{r id_map}
+# Fix invalid geometries
+# This is necessary because some of the borders overlap, 
+# which can lead to issues when performing spatial operations.
+germany <- st_transform(germany, 
+                        crs = 32632)  
+# Transform the geometries to UTM zone 32N (meters) for valid geometric operations
+germany <- st_make_valid(germany)  # Fix any invalid geometries in the dataset
+germany <- st_transform(germany, 
+                        crs = 4326)  
+# Transform back to WGS84 (latitude/longitude) for consistency
+
+# Create unique dialect IDs based on language_region
+germany <- germany %>%
+  # Calculate centroids for each geometry to help with ordering
+  mutate(centroid = st_centroid(geometry)) %>%
+  # Extract the longitude of each centroid for ordering
+  mutate(lon = st_coordinates(centroid)[, 1]) %>%
+  # Arrange the data frame by longitude for west-to-east ordering
+  arrange(lon) %>%
+  # Group by language_region to ensure IDs are created within each region
+  group_by(language_region) %>%
+  # Create a new dialect_id by concatenating the first letter of 
+  # language_region with a unique number
+  mutate(dialect_id = paste0(toupper(substring(language_region, 
+                                               1, 
+                                               1)), 
+                             row_number())) %>%
+  ungroup() %>%
+  # Remove temporary columns used for calculations
+  select(-centroid, -lon)  # Clean up by removing temporary columns
+
+# Plot the dialect regions with updated IDs
+ggplot() +
+  # Draw the geometries for the dialect regions, filling with white
+  geom_sf(data = germany, 
+          aes(geometry = geometry),
+          fill = "white") +
+  # Add text labels with the dialect IDs to the map
+  geom_sf_text(data = germany, 
+               aes(label = dialect_id), 
+               size = 3, # Adjust the size of the text labels as necessary
+               position = position_nudge(y = 0.02), 
+               # Adjust position to avoid overlap with other text
+               check_overlap = TRUE) + # Prevent text labels from overlapping on the map
+  theme_minimal() +  # Use a minimal theme for the plot
+  theme(axis.title.x = element_blank(),  # Remove x-axis title
+        axis.title.y = element_blank(),  # Remove y-axis title
+        axis.text.x = element_blank(),    # Remove x-axis text labels
+        axis.text.y = element_blank(),    # Remove y-axis text labels
+        panel.grid.major = element_blank(), # Remove major grid lines
+        plot.title = element_text(size = 10, family = "Optima", hjust = 0.5) 
+        # Customize the title's appearance
+        ) +
+  # Set the title of the plot
+  ggtitle("Dialect Regions within Germany")
+```
+
+```{r publish_plot}
+# plot with just dialect regions
+ggplot() +
+  geom_sf(data = germany, 
+          aes(geometry = geometry),
+          fill = "white") +
+  theme_minimal() +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank(),
+        plot.title = element_text(size = 10, family = "Optima", hjust = 0.5)
+        ) +
+  ggtitle("Dialect Regions within Germany")
+```
+
+```{r publish_plot2}
+# plot with transition areas patterned
+ggplot(germany) + 
+  geom_sf(data = germany, 
+          aes(geometry = geometry, 
+              fill = transition), 
+          color = 'black',
+          fill = "white") +  # Basic fill for all areas
+  geom_sf_pattern(data = subset(germany, 
+                                transition == "ja"),  # Apply pattern only to ja areas
+                  aes(geometry = geometry),
+                  pattern = 'stripe',
+                  fill = 'white',  # Base fill for pattern areas
+                  pattern_density = 0.04,
+                  pattern_spacing = 0.02,
+                  pattern_fill = 'black',
+                  color = 'black',
+                  pattern_colour  = 'black'
+  ) +
+  scale_pattern_fill_manual(values = c(ja = 'black')) +  
+  theme_minimal() +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank(),
+        plot.title = element_text(size = 10, family = "Optima", hjust = 0.5),
+        legend.position = "none"
+  ) +
+  ggtitle("Transition Dialect Areas")
+```
+
+```{r publish_plot3}
+# plot with low saxon coloured
+ggplot() +
+  geom_sf(data = germany, 
+          aes(geometry = geometry,
+              fill = lowsaxon),
+          alpha = 0.3) +
+  scale_fill_manual(values = c("plum4", "white")) +
+  theme_minimal() +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank(),
+        plot.title = element_text(size = 10, family = "Optima", hjust = 0.5),
+        legend.position = "none"
+  ) +
+  ggtitle("Low vs. Middle and High German")
+```
+
+```{r publish_plot4}
+# palette uses paletteer
+# https://r-graph-gallery.com/color-palette-finder
+
+# four major areas coloured
+ggplot() +
+  geom_sf(data = germany, 
+          aes(geometry = geometry,
+              fill = language_region),
+          alpha = 0.3) +
+  scale_fill_paletteer_d("MoMAColors::Fritsch") +
+  theme_minimal() +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        panel.grid.major = element_blank(),
+        plot.title = element_text(size = 10, family = "Optima", hjust = 0.5),
+        legend.position = "none"
+  ) +
+  ggtitle("Four Major Dialect Regions")
+```
+
+## Hotspot Prediction
+
+Following from rmd 16, these regions can be used to extract in which dialect area the hotspot of a map falls.
+
+```{r hotspot_prep}
+# Load necessary libraries
+library(dplyr)          # For data manipulation and pipeline (%>%) operations
+library(spdep)          # For spatial analysis
+library(sf)             # For handling spatial data using simple features
+library(sp)             # For handling spatial data, particularly the older sp objects
+library(tidyverse)      # Includes multiple packages like ggplot2, dplyr, tidyr
+library(gstat)          # For geostatistical modeling and kriging
+library(stringr)        # For string manipulation
+library(rnaturalearth)  # For downloading and using natural Earth map data
+
+# Load kriging data for Germany
+kriged_ger <- read.csv(file = 'data_ling/kriged/kriged_5k_300cutoff_germany.csv', 
+                       header = TRUE)  
+# Read the CSV file containing kriging results into a data frame
+
+# Clean up column names by removing dots and "X" prefixes from column names
+names(kriged_ger) <- gsub("\\.", "", names(kriged_ger))  # Remove all dots from the column names
+names(kriged_ger) <- gsub("\\<X", "", names(kriged_ger)) # Remove "X" prefix from the column names
+
+# Select the first 2002 columns of the kriging data (assuming they are relevant for further analysis)
+kriged_ger <- kriged_ger %>% dplyr::select(1:2002)
+
+# Get the outline of Germany using Natural Earth data with high resolution
+ger_outline <- ne_countries(country = "Germany", 
+                            returnclass = "sf", 
+                            scale = "large")  # Load Germany's map as an sf object
+
+# Extract only the geometry of Germany for plotting purposes
+ger_plot <- ger_outline %>% 
+  dplyr::select(geometry)  # Select only the geometry column from the sf object
+
+# Convert the simple features object to a Spatial object 
+ger_spatial <- as_Spatial(ger_plot)  # Convert sf object to a Spatial object using as_Spatial()
+
+# Create a data frame of major German cities with their coordinates
+cities_ger <- data.frame(
+  City = c("Köln", "München", "Berlin", "Hamburg", "Frankfurt", "Kassel"),  # List of cities
+  Long = c(6.9578, 11.5755, 13.3833, 10, 8.6821, 9.4797),                   # Longitudes 
+  Lat = c(50.9422, 48.1372, 52.5167, 53.55, 50.1109, 51.3127))              # Latitudes 
+
+# Set coordinate reference systems
+crs2 <- st_crs(4326)
+crs3 <- CRS("+init=epsg:4326") 
+
+# Convert the cities data frame to a simple features object (sf), 
+# using the specified coordinate columns
+cities_ger_sf <- st_as_sf(cities_ger, coords = c("Long", "Lat"), crs = crs2)  
+# Create sf object with coordinates and CRS
+
+# Create a systematic grid of points over the spatial extent of Germany for spatial sampling
+sp_grid_ger <- as.data.frame(spsample(ger_spatial,
+                                      n = 100000,           
+                                      # Number of points to sample in the grid
+                                      type = "regular",     
+                                      # Systematic sampling in a regular grid pattern
+                                      offset = c(0.5, 0.5))) 
+                                      # Ensures grid alignment is consistent every time
+
+# Convert the regular grid points into a simple features (sf) object for spatial operations
+sp_grid_ger_sf <- st_as_sf(sp_grid_ger, 
+                           coords = c("x1", "x2"), 
+                           crs = crs2)  # Convert grid points to sf object
+
+# Create a list of German words for analysis
+strings <- tolower(c("aber", "eigentlich", "isses", "mir", "echt", "egal"))  
+                    # Convert words to lowercase 
+
+# Ensure that the list of words contains unique values only (removes duplicates)
+strings <- unique(strings)  # Remove any duplicate words from the list
+```
+
+
+```{r hotspot_prep2}
+# Extract relevant columns (longitude and latitude) from the kriged_ger data frame
+kriged_values_ger <- kriged_ger %>% 
+  select(c("lon", 
+           "lat"))
+
+# Loop through each string in the predefined list of strings
+for (cname in strings) {
+  # Check if the current string exists as a column in the kriged_ger data frame
+  if (cname %in% colnames(kriged_ger)) {
+    # If it exists, convert the column to numeric and add it to kriged_values_ger
+    kriged_values_ger[, paste0(cname)] <- as.numeric(unlist(kriged_ger[, cname]))
+  }
+}
+
+# Create a new list of column names for further operations, excluding 'lon' and 'lat'
+strings <- toString(colnames(kriged_values_ger[3:ncol(kriged_values_ger)])) 
+# Convert column names to a single string
+strings <- trimws(unlist(strsplit(strings, ","))) 
+# Split the string back into a list of names and trim whitespace
+
+# Prepare the data for calculations by removing the 'lon' and 'lat' columns
+data_for_calculations_ger <- kriged_values_ger %>% 
+  select(-lon, -lat)
+
+# Create a new data frame for calculations containing only the coordinates
+calculation_ger <- kriged_values_ger %>% 
+  select(lon, lat)
+
+# Calculate the mean value for each row across the selected columns
+calculation_ger$mean_val <- rowMeans(data_for_calculations_ger)
+
+# Calculate the median value for each row across the selected columns
+calculation_ger$median_val <- apply(data_for_calculations_ger, 
+                                    1, 
+                                    median)
+
+# Calculate the standard deviation for each row across the selected columns
+calculation_ger$sd_val <- apply(data_for_calculations_ger, 
+                                1, 
+                                sd)
+
+# Convert the calculation data frame into a spatial data frame with specified coordinates and coordinate reference system
+calculation_ger_sf <- st_as_sf(calculation_ger, 
+                               coords = c("lon", "lat"), 
+                               crs = crs2)
+
+# Retrieve the maximum mean value, filtering for mean values greater than 0
+mean_pred_ger <- calculation_ger %>% 
+  filter(mean_val > 0) %>%           # Keep only rows where mean_val is greater than 0
+  arrange(desc(mean_val)) %>%        # Sort the data frame in descending order by mean_val
+  slice(1:1) %>%                     # Select the top row (highest mean value)
+  dplyr::select(mean_val, lon, lat)  # Select only the relevant columns for further analysis
+
+# Not needed for point prediction; perform variogram analysis
+data_ger <- calculation_ger["mean_val"]  # Prepare data frame with mean_val for variogram
+coords_ger <- calculation_ger[c("lon", "lat")]  # Prepare data frame with coordinates
+# Create a spatial points data frame with the coordinates and data
+spdf_ger <- SpatialPointsDataFrame(coords = coords_ger,
+                                    data = data_ger, 
+                                    proj4string = crs3)
+
+# Remove duplicate coordinates to avoid issues in variogram calculation
+spdf_ger = spdf_ger[which(!duplicated(spdf_ger@coords)), ]
+
+# Compute the empirical variogram for the mean value
+vg_ger <- variogram(mean_val~1, 
+                    data = spdf_ger, 
+                    width = 1, 
+                    cutoff = 300)
+
+# Fit a variogram model to the empirical variogram
+vg_fit_ger <- fit.variogram(vg_ger, 
+                            vgm("Exp")) 
+
+# Perform Kriging interpolation using the fitted variogram model
+krig_ger <- krige(mean_val~1, 
+                  locations = spdf_ger, 
+                  newdata = sp_grid_ger_sf, 
+                  model = vg_fit_ger)  # Use the variogram model for prediction
+```
+
+```{r prediction_region}
+# Get point from output above
+max_point1 <- mean_pred_ger
+
+# Fix invalid geometries
+# This is because some of the borders overlap 
+germany <- st_transform(germany, 
+                        crs = 32632)
+germany <- st_make_valid(germany)
+germany <- st_transform(germany, 
+                        crs = 4326)
+
+# Function to check which dialect region the point falls into
+check_dialect_region <- function(max_point) {
+  # Create a data frame for the highest point's coordinates
+  max_point_df <- data.frame(
+    longitude = c(max_point$lon),
+    latitude = c(max_point$lat)
+  )
+  
+  # Convert the point to an sf object with the same CRS as the dialect regions
+  point_sf <- st_as_sf(max_point_df, 
+                       coords = c("longitude", "latitude"), 
+                       crs = st_crs(germany))
+  
+  # Ensure that the point's CRS matches the germany object
+  point_sf <- st_transform(point_sf, 
+                           st_crs(germany))
+
+  # Check if the point is within any dialect region
+  point_within_region <- st_contains(germany, 
+                                     point_sf, 
+                                     sparse = FALSE)
+  
+  # Find which dialect region the point is within (if any)
+  region_index <- which(point_within_region, 
+                        arr.ind = TRUE)
+  
+  # Initialize a list to store the results
+  result <- list()
+  
+  # If the point is within a region, extract the relevant information
+  if (length(region_index) > 0) {
+    result$region_name <- germany$region[region_index[1]]
+    result$transition <- germany$transition[region_index[1]]
+    result$language_region <- germany$language_region[region_index[1]]
+    result$gid <- germany$gid[region_index[1]]
+  } else {
+    result$region_name <- "Outside any region"
+    result$transition <- NA
+    result$language_region <- NA
+    result$gid <- NA
+  }
+  
+  # Print the result
+  print(result)
+  
+  return(result)  # Return the result for further use
+}
+
+# Run the function to check which dialect region the highest point lies in
+region_result <- check_dialect_region(max_point1)
+print(region_result)
+```
+
+
+
+
+
+

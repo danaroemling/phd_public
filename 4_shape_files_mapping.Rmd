@@ -11,6 +11,17 @@ toc_float: true
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+
+## In this RMD
+
+1. Reading in Shapfiles
+2. Changing projection
+3. GSA Outline
+4. City names & postcodes to match with the shapefiles
+5. Plotting these
+6. Get county from matrix data and plot those
+
+
 ## Mapping with Shape Files
 
 This RMD is about using the shape files for the German-speaking area and filling the shapes given a frequency. 
